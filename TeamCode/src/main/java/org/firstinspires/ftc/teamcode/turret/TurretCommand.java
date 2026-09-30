@@ -39,6 +39,12 @@ public class TurretCommand {
      */
     public final boolean unwindActive;
 
+    /**
+     * False when this command is only a hold. The pose was invalid, or the
+     * inputs could not be used, so the aim and chassis request must be ignored.
+     */
+    public final boolean tracking;
+
     public TurretCommand(
             double targetBearing,
             double desiredTurretAngle,
@@ -47,7 +53,8 @@ public class TurretCommand {
             double turretMotorPower,
             double requestedChassisOmega,
             boolean targetReachable,
-            boolean unwindActive) {
+            boolean unwindActive,
+            boolean tracking) {
         this.targetBearing = targetBearing;
         this.desiredTurretAngle = desiredTurretAngle;
         this.turretAngleError = turretAngleError;
@@ -56,5 +63,6 @@ public class TurretCommand {
         this.requestedChassisOmega = requestedChassisOmega;
         this.targetReachable = targetReachable;
         this.unwindActive = unwindActive;
+        this.tracking = tracking;
     }
 }

@@ -211,6 +211,7 @@ public class RobotStateTestOpMode extends OpMode {
         telemetry.addData("Velocity valid", robot.isVelocityValid() ? "YES" : "NO");
         telemetry.addData("Hold timestamp", holdTimestamp ? "YES" : "no");
         telemetry.addData("Turret desired deg", "%.2f", AngleUtil.toDegrees(turretCommand.desiredTurretAngle));
+        telemetry.addData("Turret tracking", turretCommand.tracking ? "YES" : "NO");
         telemetry.addLine("LS velocity | RS spin | A translate | B rotate | X both");
         telemetry.addLine("Y step vx | DL wrap | DD pose invalid | DU NaN vel | LB bad dt | Start reset");
     }

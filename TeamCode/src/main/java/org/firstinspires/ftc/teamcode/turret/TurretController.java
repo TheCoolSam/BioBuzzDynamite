@@ -29,6 +29,9 @@ public class TurretController {
     }
 
     public TurretCommand calculate(TurretState state) {
+        if (state != null && !state.poseValid) {
+            return holdPosition(state);
+        }
         if (!inputsUsable(state)) {
             return safeHold(state);
         }
@@ -67,13 +70,16 @@ public class TurretController {
         hasLastError = true;
 
         // Turret goal is bearing - heading, so its rate is bearing rate minus chassis yaw.
-        // Bearing rate covers strafing past a fixed target. Yaw covers a collision spin.
-        double dx = state.targetX - state.robotX;
-        double dy = state.targetY - state.robotY;
-        double desiredVelocity = AngleUtil.bearingRate(dx, dy, state.robotVx, state.robotVy)
-                - state.robotAngularVelocity;
-        if (!Double.isFinite(desiredVelocity)) {
-            desiredVelocity = 0.0;
+        // An untrusted velocity contributes no feedforward. Position aiming still runs.
+        double desiredVelocity = 0.0;
+        if (state.velocityValid) {
+            double dx = state.targetX - state.robotX;
+            double dy = state.targetY - state.robotY;
+            desiredVelocity = AngleUtil.bearingRate(dx, dy, state.robotVx, state.robotVy)
+                    - state.robotAngularVelocity;
+            if (!Double.isFinite(desiredVelocity)) {
+                desiredVelocity = 0.0;
+            }
         }
 
         double power = (TurretConstants.KP * error)
@@ -102,7 +108,8 @@ public class TurretController {
                 power,
                 chassisOmega,
                 choice.reachable,
-                unwindActive);
+                unwindActive,
+                true);
     }
 
     /**
@@ -180,18 +187,36 @@ public class TurretController {
     }
 
     private static boolean inputsUsable(TurretState state) {
-        return state != null
-                && finite(state.robotX)
-                && finite(state.robotY)
-                && finite(state.robotHeading)
-                && finite(state.robotVx)
+        if (state == null
+                || !finite(state.robotX)
+                || !finite(state.robotY)
+                || !finite(state.robotHeading)
+                || !finite(state.turretAngle)
+                || !finite(state.turretVelocity)
+                || !finite(state.targetX)
+                || !finite(state.targetY)
+                || !finite(state.dt)) {
+            return false;
+        }
+        if (!state.velocityValid) {
+            return true;
+        }
+        return finite(state.robotVx)
                 && finite(state.robotVy)
-                && finite(state.robotAngularVelocity)
-                && finite(state.turretAngle)
-                && finite(state.turretVelocity)
-                && finite(state.targetX)
-                && finite(state.targetY)
-                && finite(state.dt);
+                && finite(state.robotAngularVelocity);
+    }
+
+    /**
+     * Pose cannot be aimed. Keep the measured turret angle, apply no power,
+     * and do not ask the chassis to unwind from geometry we do not trust.
+     * Does not change the unwind latch or the derivative memory.
+     */
+    private static TurretCommand holdPosition(TurretState state) {
+        double hold = 0.0;
+        if (state != null && finite(state.turretAngle)) {
+            hold = state.turretAngle;
+        }
+        return new TurretCommand(0.0, hold, 0.0, 0.0, 0.0, 0.0, false, false, false);
     }
 
     private static TurretCommand safeHold(TurretState state) {
@@ -206,7 +231,7 @@ public class TurretController {
                     TurretConstants.PHYSICAL_MIN_RAD,
                     TurretConstants.PHYSICAL_MAX_RAD);
         }
-        return new TurretCommand(0.0, hold, 0.0, 0.0, 0.0, 0.0, false, false);
+        return new TurretCommand(0.0, hold, 0.0, 0.0, 0.0, 0.0, false, false, false);
     }
 
     private static boolean finite(double value) {

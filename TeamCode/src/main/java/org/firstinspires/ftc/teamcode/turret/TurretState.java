@@ -27,4 +27,16 @@ public class TurretState {
 
     /** Seconds since the previous control cycle. Zero or negative is allowed. */
     public double dt;
+
+    /**
+     * False when localization has no pose this loop. Defaults true so a state
+     * filled by hand still aims. The controller holds position when this is false.
+     */
+    public boolean poseValid = true;
+
+    /**
+     * False when field and yaw rates should not be trusted. Defaults true.
+     * Aiming continues, but feedforward is zero.
+     */
+    public boolean velocityValid = true;
 }
