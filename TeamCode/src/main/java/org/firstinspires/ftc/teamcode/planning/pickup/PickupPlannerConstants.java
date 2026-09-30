@@ -12,12 +12,18 @@ public final class PickupPlannerConstants {
 
     /**
      * Largest set of pieces that enters the permutation search.
-     * Ordered routes of length up to {@link #MAX_CAPACITY} from 8 pieces is
-     * 2081 sequences. That stays cheap beside vision and the turret loop.
-     * A 10-piece pool would still be fine, but 8 leaves margin and is already
-     * more balls than this robot expects to see in one frame.
+     * Ordered routes of length up to {@link #MAX_CAPACITY} from 10 pieces is
+     * 5861 sequences. That stays cheap beside vision and the turret loop.
      */
-    public static final int MAX_CANDIDATES = 8;
+    public static final int MAX_CANDIDATES = 10;
+
+    /**
+     * How many of each {@link BallType} are admitted before leftover slots
+     * are filled by distance and confidence. Equal to capacity so a full load
+     * of either type can still be assembled when the other type crowds the frame.
+     * This is not a statement that one type is worth more.
+     */
+    public static final int RESERVED_CANDIDATES_PER_TYPE = 4;
 
     /** Points awarded for a HIVE tip. The utility numerator uses this. */
     public static final double TIP_POINTS = 20.0;
@@ -29,10 +35,16 @@ public final class PickupPlannerConstants {
     public static final double REPLAN_IMPROVEMENT_THRESHOLD = 0.15;
 
     /**
-     * Seconds charged to a plan that does not drive, including shoot-now.
-     * Keeps the utility finite. Placeholder for "already aimed, just shoot".
+     * Floor on the utility denominator so a zero-time estimate cannot explode.
+     * Applied to every plan, including shoot-now. It is not a head start.
      */
     public static final double MINIMUM_CYCLE_SEC = 0.25;
+
+    /**
+     * Placeholder seconds to release a shot once the robot is already at a
+     * scoring pose and heading. Not a measured flywheel or turret time.
+     */
+    public static final double SHOT_EXECUTION_SEC = 0.80;
 
     /** Planning speed, inches per second. Not a motor characterization. */
     public static final double NOMINAL_SPEED_IN_PER_SEC = 40.0;

@@ -15,22 +15,24 @@ import java.util.List;
  * <pre>
  *   G = geometric mean of the confidences on that route (1 when shooting now)
  *   planConfidence = (1 - CONFIDENCE_BLEND) + CONFIDENCE_BLEND * G
- *   cycleTime = max(MINIMUM_CYCLE_SEC, travel + intake time)
- *   utility = (TIP_POINTS * tipProbability * planConfidence) / cycleTime
+ *   totalTimeToTip = pickupTravelAndIntake + shotSetupAndExecution
+ *   utility = (TIP_POINTS * tipProbability * planConfidence)
+ *              / max(MINIMUM_CYCLE_SEC, totalTimeToTip)
  * </pre>
- * Dividing by time is what stops a long drive for a tiny probability gain.
- * Shoot-now is a real candidate: its cycle time is just
- * {@link PickupPlannerConstants#MINIMUM_CYCLE_SEC}. The blend keeps an
- * uncalibrated confidence score from deleting an otherwise good route.
+ * Shoot-now uses the same shot model from the robot's current pose, with no
+ * pickup time. The minimum is only a floor so a zero estimate cannot make
+ * utility infinite. The blend keeps an uncalibrated confidence score from
+ * deleting an otherwise good route.
  *
  * <p>Search is every ordered sequence whose length is at most the remaining
  * capacity, drawn from at most {@link PickupPlannerConstants#MAX_CANDIDATES}
- * pieces. For n = 8 and depth 4 that is 2081 routes, each O(depth) to score.
- * Work is O(n log n) to prune plus O(depth * P(n, depth)). When more than
- * 8 pieces are visible, the pool keeps the highest
- * {@code confidence / (1 + distance)} scores. That cap can drop a far but
- * valuable piece on a crowded field. Inside the pool the search is not a
- * nearest-ball rule.
+ * pieces. For n = 10 and depth 4 that is 5861 routes, each O(depth) to score.
+ * Work is O(m log m) to prune plus O(depth * P(n, depth)). When more pieces
+ * are visible, each ball type first keeps up to
+ * {@link PickupPlannerConstants#RESERVED_CANDIDATES_PER_TYPE} of its best
+ * nearby confident detections, round-robin so neither type fills the pool
+ * alone. Leftover slots use {@code confidence / (1 + distance)}. That ranking
+ * is only admission. Tip value is decided later, on complete routes.
  *
  * <p>A committed plan is kept until its route is impossible or a new route
  * beats its stored utility by {@link PickupPlannerConstants#REPLAN_IMPROVEMENT_THRESHOLD}.
@@ -38,6 +40,11 @@ import java.util.List;
  * is listed twice, or the route no longer fits in the robot. After a successful
  * intake the caller adds the piece to {@link BallLoad}, removes it from the
  * visible list, and calls {@link #plan} again.
+ *
+ * <p>A later path follower should drive {@link PickupPlan#getTargets()} in
+ * order, then go from {@link PickupPlan#getEndpointX()} to a scoring pose.
+ * Replace {@link TravelTimeModel} and {@link ShotSetupTimeModel} with
+ * follower-aware estimates. This class must not gain a dependency on that follower.
  */
 public final class PickupPlanner {
 
@@ -45,10 +52,12 @@ public final class PickupPlanner {
 
     private final TipModel tipModel;
     private final TravelTimeModel travel;
+    private final ShotSetupTimeModel shotSetup;
 
-    public PickupPlanner(TipModel tipModel, TravelTimeModel travel) {
+    public PickupPlanner(TipModel tipModel, TravelTimeModel travel, ShotSetupTimeModel shotSetup) {
         this.tipModel = tipModel;
         this.travel = travel;
+        this.shotSetup = shotSetup;
     }
 
     /**
@@ -91,10 +100,67 @@ public final class PickupPlanner {
         if (fresh.size() <= PickupPlannerConstants.MAX_CANDIDATES) {
             return fresh;
         }
+        return capPool(fresh, robot.getFieldX(), robot.getFieldY());
+    }
 
-        final double originX = robot.getFieldX();
-        final double originY = robot.getFieldY();
-        Collections.sort(fresh, new Comparator<TrackedPiece>() {
+    /**
+     * Keep a reserved slice of every ball type, then fill what is left.
+     * Round-robin across types so pollen cannot consume the reserve before
+     * nectar is considered, or the other way around.
+     */
+    private static List<TrackedPiece> capPool(List<TrackedPiece> fresh, final double originX, final double originY) {
+        BallType[] types = BallType.values();
+        List<List<TrackedPiece>> groups = new ArrayList<List<TrackedPiece>>();
+        for (int typeIndex = 0; typeIndex < types.length; typeIndex++) {
+            groups.add(new ArrayList<TrackedPiece>());
+        }
+        for (int i = 0; i < fresh.size(); i++) {
+            TrackedPiece piece = fresh.get(i);
+            groups.get(typeIndex(piece.getType(), types)).add(piece);
+        }
+        for (int typeIndex = 0; typeIndex < groups.size(); typeIndex++) {
+            sortByPoolScore(groups.get(typeIndex), originX, originY);
+        }
+
+        List<TrackedPiece> pool = new ArrayList<TrackedPiece>();
+        int[] cursor = new int[types.length];
+        int reserve = PickupPlannerConstants.RESERVED_CANDIDATES_PER_TYPE;
+        for (int round = 0; round < reserve && pool.size() < PickupPlannerConstants.MAX_CANDIDATES; round++) {
+            for (int typeIndex = 0; typeIndex < types.length
+                    && pool.size() < PickupPlannerConstants.MAX_CANDIDATES; typeIndex++) {
+                List<TrackedPiece> group = groups.get(typeIndex);
+                if (cursor[typeIndex] < group.size()) {
+                    pool.add(group.get(cursor[typeIndex]));
+                    cursor[typeIndex]++;
+                }
+            }
+        }
+
+        List<TrackedPiece> rest = new ArrayList<TrackedPiece>();
+        for (int typeIndex = 0; typeIndex < groups.size(); typeIndex++) {
+            List<TrackedPiece> group = groups.get(typeIndex);
+            for (int i = cursor[typeIndex]; i < group.size(); i++) {
+                rest.add(group.get(i));
+            }
+        }
+        sortByPoolScore(rest, originX, originY);
+        for (int i = 0; i < rest.size() && pool.size() < PickupPlannerConstants.MAX_CANDIDATES; i++) {
+            pool.add(rest.get(i));
+        }
+        return pool;
+    }
+
+    private static int typeIndex(BallType type, BallType[] types) {
+        for (int i = 0; i < types.length; i++) {
+            if (types[i] == type) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    private static void sortByPoolScore(List<TrackedPiece> pieces, final double originX, final double originY) {
+        Collections.sort(pieces, new Comparator<TrackedPiece>() {
             @Override
             public int compare(TrackedPiece a, TrackedPiece b) {
                 int byScore = Double.compare(poolScore(b, originX, originY), poolScore(a, originX, originY));
@@ -104,12 +170,11 @@ public final class PickupPlanner {
                 return Integer.compare(a.getId(), b.getId());
             }
         });
-        return new ArrayList<TrackedPiece>(fresh.subList(0, PickupPlannerConstants.MAX_CANDIDATES));
     }
 
     /**
-     * Pool ranking only. Near and well-seen pieces stay when the field is
-     * crowded. Tip value is decided later, on complete routes.
+     * Admission ranking only. Near and well-seen pieces are preferred when a
+     * type has more detections than its reserve. Tip value is not in this score.
      */
     private static double poolScore(TrackedPiece piece, double originX, double originY) {
         double dx = piece.getFieldX() - originX;
@@ -228,16 +293,27 @@ public final class PickupPlanner {
                 ? 1.0
                 : (1.0 - PickupPlannerConstants.CONFIDENCE_BLEND)
                 + (PickupPlannerConstants.CONFIDENCE_BLEND * Math.pow(confidenceProduct, 1.0 / length));
-        if (length == 0) {
-            time = PickupPlannerConstants.MINIMUM_CYCLE_SEC;
-        }
-        double cycle = Math.max(PickupPlannerConstants.MINIMUM_CYCLE_SEC, time);
+        // x, y, heading are the robot now when nothing was picked up, otherwise
+        // the last capture pose. Shot time is measured from that endpoint.
+        double total = time + shotSeconds(x, y, heading, load);
+        double cycle = Math.max(PickupPlannerConstants.MINIMUM_CYCLE_SEC, total);
         double tip = tipProbability(load);
         double utility = (PickupPlannerConstants.TIP_POINTS * tip * planConfidence) / cycle;
         PickupPlan.Decision decision = length == 0
                 ? PickupPlan.Decision.SHOOT_NOW
                 : PickupPlan.Decision.PICKUP;
-        return PickupPlan.of(decision, targets, load, tip, time, planConfidence, utility);
+        return PickupPlan.of(decision, targets, load, tip, total, planConfidence, utility, x, y, heading);
+    }
+
+    private double shotSeconds(double x, double y, double heading, BallLoad load) {
+        if (shotSetup == null) {
+            return PickupPlannerConstants.SHOT_EXECUTION_SEC;
+        }
+        double seconds = shotSetup.estimateSeconds(x, y, heading, load);
+        if (!Double.isFinite(seconds) || seconds < 0.0) {
+            return 1.0e6;
+        }
+        return seconds;
     }
 
     private double travelSeconds(double x, double y, double heading, PickupTarget target) {

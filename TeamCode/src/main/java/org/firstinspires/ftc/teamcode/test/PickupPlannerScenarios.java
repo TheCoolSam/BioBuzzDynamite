@@ -4,12 +4,15 @@ import org.firstinspires.ftc.teamcode.planning.pickup.BallLoad;
 import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
 import org.firstinspires.ftc.teamcode.planning.pickup.CaptureGeometry;
 import org.firstinspires.ftc.teamcode.planning.pickup.EuclideanTravelTimeModel;
+import org.firstinspires.ftc.teamcode.planning.pickup.FixedShotSetupModel;
 import org.firstinspires.ftc.teamcode.planning.pickup.MapTipModel;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlan;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlanner;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlannerConstants;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupTarget;
 import org.firstinspires.ftc.teamcode.planning.pickup.PieceOwnership;
+import org.firstinspires.ftc.teamcode.planning.pickup.PreferredPoseShotSetup;
+import org.firstinspires.ftc.teamcode.planning.pickup.ShotSetupTimeModel;
 import org.firstinspires.ftc.teamcode.planning.pickup.TrackedPiece;
 import org.firstinspires.ftc.teamcode.state.RobotState;
 
@@ -41,7 +44,11 @@ public final class PickupPlannerScenarios {
         testTargetDisappears();
         testInvalidPoseDoesNotUseOrigin();
         testCollectThenReplan();
-        testCrowdedPoolDropsTheNinth();
+        testReservedSlotKeepsTheOtherType();
+        testRouteFinishingNearTheShotWins();
+        testShootNowUsesShotTravel();
+        testNectarSurvivesAPollenCrowd();
+        testPollenSurvivesANectarCrowd();
         System.out.println("PICKUP PLANNER CHECKS PASSED (" + checks + ")");
     }
 
@@ -380,11 +387,10 @@ public final class PickupPlannerScenarios {
     }
 
     /**
-     * Nine pieces exceed the pool. The far high-value nectar loses its seat to
-     * eight nearer pollen. This is the cap, not the route score. Test A shows
-     * a far nectar still wins when it fits in the pool.
+     * More pollen than the pool can hold, plus one far nectar. The nectar keeps
+     * a reserved seat, so a tip that only that nectar can produce is still found.
      */
-    private static void testCrowdedPoolDropsTheNinth() {
+    private static void testReservedSlotKeepsTheOtherType() {
         MapTipModel tips = new MapTipModel().set(0, 1, 0.99);
         PickupPlanner planner = planner(tips);
         List<TrackedPiece> crowded = new ArrayList<TrackedPiece>();
@@ -393,8 +399,109 @@ public final class PickupPlannerScenarios {
         }
         crowded.add(ball(100, BallType.NECTAR, 220.0, 0.0));
         PickupPlan plan = planner.plan(pose(0.0, 0.0), BallLoad.empty(), crowded, 0.0, null);
-        check(plan.getDecision() == PickupPlan.Decision.SHOOT_NOW, "pool cap drops the ninth piece");
-        check(!containsId(plan, 100), "far nectar was not in the candidate pool");
+        check(containsId(plan, 100), "reserved slot keeps the lone nectar");
+        check(plan.getResultingLoad().getNectar() == 1, "the nectar is the load that tips");
+    }
+
+    /**
+     * Same load and tip chance. The route that finishes next to the injected
+     * shot wins even though collecting it takes longer.
+     */
+    private static void testRouteFinishingNearTheShotWins() {
+        MapTipModel tips = new MapTipModel().set(1, 0, 0.80);
+        PreferredPoseShotSetup.ShotPose shot = new PreferredPoseShotSetup.ShotPose(0.0, 0.0, 0.0);
+        PickupPlanner planner = planner(tips, new PreferredPoseShotSetup(shot));
+        RobotState robot = pose(0.0, 60.0);
+        TrackedPiece farFinish = ball(1, BallType.POLLEN, 40.0, 60.0);
+        TrackedPiece nearFinish = ball(2, BallType.POLLEN, 0.0, 20.0);
+
+        double collectFar = routeSeconds(robot, Arrays.asList(farFinish));
+        double collectNear = routeSeconds(robot, Arrays.asList(nearFinish));
+        check(collectNear > collectFar, "L the near-shot piece takes longer to collect");
+
+        PickupPlan onlyFar = planner.plan(robot, BallLoad.empty(), Arrays.asList(farFinish), 0.0, null);
+        PickupPlan onlyNear = planner.plan(robot, BallLoad.empty(), Arrays.asList(nearFinish), 0.0, null);
+        check(onlyNear.getEstimatedSeconds() < onlyFar.getEstimatedSeconds(),
+                "L finishing beside the shot lowers time-to-tip");
+        check(distanceToShot(onlyNear, shot) < distanceToShot(onlyFar, shot),
+                "L the winning endpoint is closer to the shot");
+
+        PickupPlan both = planner.plan(
+                robot,
+                BallLoad.empty(),
+                Arrays.asList(farFinish, nearFinish),
+                0.0,
+                null);
+        check(containsId(both, 2), "L chooses the route that ends near the shot");
+        check(!containsId(both, 1), "L leaves the fast pickup that ends far away");
+        check(both.getTargets().size() == 1, "L takes the one pollen, not both");
+    }
+
+    /**
+     * A loaded robot far from the shot pays the drive. Shoot-now is not a
+     * 0.25 second cycle. A piece that ends beside the shot can beat that drive.
+     */
+    private static void testShootNowUsesShotTravel() {
+        PreferredPoseShotSetup.ShotPose shot = new PreferredPoseShotSetup.ShotPose(120.0, 0.0, 0.0);
+        ShotSetupTimeModel shots = new PreferredPoseShotSetup(shot);
+        MapTipModel tips = new MapTipModel().set(0, 3, 0.90).set(0, 2, 0.30);
+        PickupPlanner planner = planner(tips, shots);
+        RobotState robot = pose(0.0, 0.0);
+
+        PickupPlan shoot = planner.plan(robot, new BallLoad(0, 3), new ArrayList<TrackedPiece>(), 0.0, null);
+        check(shoot.getDecision() == PickupPlan.Decision.SHOOT_NOW, "M shoots the onboard load");
+        near(shoot.getEndpointX(), 0.0, 1e-9, "M shoot-now starts from the robot");
+        near(shoot.getEndpointY(), 0.0, 1e-9, "M shoot-now y is the robot");
+        double expected = shots.estimateSeconds(0.0, 0.0, 0.0, new BallLoad(0, 3));
+        near(shoot.getEstimatedSeconds(), expected, 1e-9, "M time is the shot model");
+        check(shoot.getEstimatedSeconds() > 2.0, "M is not a 0.25 second cycle");
+
+        MapTipModel partial = new MapTipModel().set(0, 2, 0.30).set(0, 3, 0.90);
+        PickupPlanner acquiring = planner(partial, new PreferredPoseShotSetup(
+                new PreferredPoseShotSetup.ShotPose(80.0, 0.0, 0.0)));
+        TrackedPiece besideShot = ball(5, BallType.NECTAR, 70.0, 0.0);
+        PickupPlan grabbed = acquiring.plan(
+                robot,
+                new BallLoad(0, 2),
+                Arrays.asList(besideShot),
+                0.0,
+                null);
+        check(grabbed.getDecision() == PickupPlan.Decision.PICKUP, "M a nearby piece can beat shoot-now");
+        check(containsId(grabbed, 5), "M collects the piece that finishes by the shot");
+    }
+
+    /** Eight-plus close pollen must not erase three farther nectar the tip model wants. */
+    private static void testNectarSurvivesAPollenCrowd() {
+        MapTipModel tips = new MapTipModel().set(0, 3, 0.95);
+        PickupPlanner planner = planner(tips);
+        List<TrackedPiece> pieces = new ArrayList<TrackedPiece>();
+        for (int i = 0; i < 9; i++) {
+            pieces.add(ball(i + 1, BallType.POLLEN, 6.0 + (4.0 * i), 0.0));
+        }
+        pieces.add(ball(21, BallType.NECTAR, 90.0, 0.0));
+        pieces.add(ball(22, BallType.NECTAR, 108.0, 0.0));
+        pieces.add(ball(23, BallType.NECTAR, 126.0, 0.0));
+
+        PickupPlan plan = planner.plan(pose(0.0, 0.0), BallLoad.empty(), pieces, 0.0, null);
+        check(plan.getTargets().size() == 3, "N takes three nectar");
+        check(allType(plan, BallType.NECTAR), "N the pollen crowd does not hide the nectar");
+    }
+
+    /** The reserve is not nectar-biased. Far pollen survive a nectar crowd. */
+    private static void testPollenSurvivesANectarCrowd() {
+        MapTipModel tips = new MapTipModel().set(3, 0, 0.92);
+        PickupPlanner planner = planner(tips);
+        List<TrackedPiece> pieces = new ArrayList<TrackedPiece>();
+        for (int i = 0; i < 9; i++) {
+            pieces.add(ball(i + 1, BallType.NECTAR, 6.0 + (4.0 * i), 0.0));
+        }
+        pieces.add(ball(21, BallType.POLLEN, 90.0, 0.0));
+        pieces.add(ball(22, BallType.POLLEN, 108.0, 0.0));
+        pieces.add(ball(23, BallType.POLLEN, 126.0, 0.0));
+
+        PickupPlan plan = planner.plan(pose(0.0, 0.0), BallLoad.empty(), pieces, 0.0, null);
+        check(plan.getTargets().size() == 3, "O takes three pollen");
+        check(allType(plan, BallType.POLLEN), "O the nectar crowd does not hide the pollen");
     }
 
     private static int[] fastestOrder(RobotState robot, List<TrackedPiece> pieces) {
@@ -486,7 +593,15 @@ public final class PickupPlannerScenarios {
     }
 
     private static PickupPlanner planner(MapTipModel tips) {
-        return new PickupPlanner(tips, new EuclideanTravelTimeModel());
+        return planner(tips, new FixedShotSetupModel(PickupPlannerConstants.SHOT_EXECUTION_SEC));
+    }
+
+    private static PickupPlanner planner(MapTipModel tips, ShotSetupTimeModel shots) {
+        return new PickupPlanner(tips, new EuclideanTravelTimeModel(), shots);
+    }
+
+    private static double distanceToShot(PickupPlan plan, PreferredPoseShotSetup.ShotPose shot) {
+        return Math.hypot(plan.getEndpointX() - shot.getX(), plan.getEndpointY() - shot.getY());
     }
 
     private static RobotState pose(double x, double y) {

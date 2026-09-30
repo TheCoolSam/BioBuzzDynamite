@@ -13,6 +13,7 @@ import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlan;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlanner;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupTarget;
 import org.firstinspires.ftc.teamcode.planning.pickup.PieceOwnership;
+import org.firstinspires.ftc.teamcode.planning.pickup.PreferredPoseShotSetup;
 import org.firstinspires.ftc.teamcode.planning.pickup.TrackedPiece;
 import org.firstinspires.ftc.teamcode.state.RobotState;
 
@@ -52,8 +53,18 @@ public class PickupPlannerTestOpMode extends OpMode {
             .set(0, 3, 0.90)
             .set(1, 3, 0.93);
 
+    /**
+     * Demo fixture only. Not a measured HIVE location. The planner times the
+     * drive from the end of a route to this pose the same way it times shoot-now.
+     */
+    private static final PreferredPoseShotSetup DEMO_SHOT = new PreferredPoseShotSetup(
+            new PreferredPoseShotSetup.ShotPose(72.0, 0.0, 0.0));
+
     private final ElapsedTime timer = new ElapsedTime();
-    private final PickupPlanner planner = new PickupPlanner(DEMO_TIPS, new EuclideanTravelTimeModel());
+    private final PickupPlanner planner = new PickupPlanner(
+            DEMO_TIPS,
+            new EuclideanTravelTimeModel(),
+            DEMO_SHOT);
     private final List<TrackedPiece> pieces = new ArrayList<TrackedPiece>();
 
     private BallLoad load = BallLoad.empty();

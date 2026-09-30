@@ -12,9 +12,9 @@ import java.util.List;
 public final class PickupPlan {
 
     public enum Decision {
-        /** Current load is the best use of time. Drive nowhere. */
+        /** No pickup targets. Time still includes getting from this pose to a shot. */
         SHOOT_NOW,
-        /** Drive the capture poses in order. */
+        /** Drive the capture poses in order, then set up the shot from the last one. */
         PICKUP,
         /** Pose is unusable. Do not move as if the robot were at the origin. */
         INVALID
@@ -27,6 +27,9 @@ public final class PickupPlan {
     private final double estimatedSeconds;
     private final double planConfidence;
     private final double utility;
+    private final double endpointX;
+    private final double endpointY;
+    private final double endpointHeadingRad;
 
     private PickupPlan(
             Decision decision,
@@ -35,7 +38,10 @@ public final class PickupPlan {
             double tipProbability,
             double estimatedSeconds,
             double planConfidence,
-            double utility) {
+            double utility,
+            double endpointX,
+            double endpointY,
+            double endpointHeadingRad) {
         this.decision = decision;
         this.targets = Collections.unmodifiableList(new ArrayList<PickupTarget>(targets));
         this.resultingLoad = resultingLoad;
@@ -43,6 +49,9 @@ public final class PickupPlan {
         this.estimatedSeconds = estimatedSeconds;
         this.planConfidence = planConfidence;
         this.utility = utility;
+        this.endpointX = endpointX;
+        this.endpointY = endpointY;
+        this.endpointHeadingRad = endpointHeadingRad;
     }
 
     public static PickupPlan invalid(BallLoad load) {
@@ -50,6 +59,9 @@ public final class PickupPlan {
                 Decision.INVALID,
                 new ArrayList<PickupTarget>(),
                 load == null ? BallLoad.empty() : load,
+                0.0,
+                0.0,
+                0.0,
                 0.0,
                 0.0,
                 0.0,
@@ -63,7 +75,10 @@ public final class PickupPlan {
             double tipProbability,
             double estimatedSeconds,
             double planConfidence,
-            double utility) {
+            double utility,
+            double endpointX,
+            double endpointY,
+            double endpointHeadingRad) {
         return new PickupPlan(
                 decision,
                 targets,
@@ -71,7 +86,10 @@ public final class PickupPlan {
                 tipProbability,
                 estimatedSeconds,
                 planConfidence,
-                utility);
+                utility,
+                endpointX,
+                endpointY,
+                endpointHeadingRad);
     }
 
     /**
@@ -87,7 +105,10 @@ public final class PickupPlan {
                 tipProbability,
                 estimatedSeconds,
                 planConfidence,
-                stored);
+                stored,
+                endpointX,
+                endpointY,
+                endpointHeadingRad);
     }
 
     public Decision getDecision() {
@@ -120,5 +141,21 @@ public final class PickupPlan {
 
     public double getUtility() {
         return utility;
+    }
+
+    /**
+     * Pose where shot setup starts. The robot's current pose for shoot-now,
+     * or the last capture pose after a pickup route. Inches and radians.
+     */
+    public double getEndpointX() {
+        return endpointX;
+    }
+
+    public double getEndpointY() {
+        return endpointY;
+    }
+
+    public double getEndpointHeadingRad() {
+        return endpointHeadingRad;
     }
 }
