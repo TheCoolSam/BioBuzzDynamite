@@ -17,18 +17,36 @@ public final class TurretConstants {
     /** Placeholder physical stop, about -165 degrees. */
     public static final double PHYSICAL_MIN_RAD = Math.toRadians(-165.0);
 
-    /** Placeholder physical stop, about +165 degrees. */
+    /** Placeholder physical stop, about +165 degrees. Final safety clamp only. */
     public static final double PHYSICAL_MAX_RAD = Math.toRadians(165.0);
 
     /**
-     * Chassis unwind starts growing once the commanded turret angle passes
-     * this distance from center. About 140 degrees.
+     * Lowest turret angle the controller will intentionally command.
+     * Inside the physical stop by about 5 degrees. Placeholder, about -160 degrees.
      */
-    public static final double UNWIND_START_RAD = Math.toRadians(140.0);
+    public static final double OPERATING_MIN_RAD = Math.toRadians(-160.0);
+
+    /**
+     * Highest turret angle the controller will intentionally command.
+     * Inside the physical stop by about 5 degrees. Placeholder, about +160 degrees.
+     */
+    public static final double OPERATING_MAX_RAD = Math.toRadians(160.0);
+
+    /**
+     * Unwind latches on once the commanded turret angle passes this.
+     * About 140 degrees. The chassis request grows only past this angle.
+     */
+    public static final double UNWIND_ENTER_RAD = Math.toRadians(140.0);
+
+    /**
+     * Unwind stays latched until the commanded angle is back inside this.
+     * About 130 degrees. Stops the request from flickering around the enter angle.
+     */
+    public static final double UNWIND_EXIT_RAD = Math.toRadians(130.0);
 
     /**
      * Chassis radians per second requested per radian of turret angle past
-     * {@link #UNWIND_START_RAD}. Placeholder.
+     * {@link #UNWIND_ENTER_RAD}. Placeholder.
      */
     public static final double UNWIND_KP = 3.0;
 

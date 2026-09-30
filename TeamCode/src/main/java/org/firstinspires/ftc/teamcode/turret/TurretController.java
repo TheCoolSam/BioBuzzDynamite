@@ -20,10 +20,12 @@ public class TurretController {
 
     private double lastErrorRad = 0.0;
     private boolean hasLastError = false;
+    private boolean unwindLatched = false;
 
     public void reset() {
         lastErrorRad = 0.0;
         hasLastError = false;
+        unwindLatched = false;
     }
 
     public TurretCommand calculate(TurretState state) {
@@ -40,14 +42,19 @@ public class TurretController {
         double ideal = AngleUtil.robotRelativeAngle(bearing, state.robotHeading);
 
         AngleChoice choice = chooseReachableAngle(ideal, state.turretAngle);
+        // Command inside the operating window. Physical stops are only a backstop.
         double desired = AngleUtil.clamp(
                 choice.angleRad,
+                TurretConstants.OPERATING_MIN_RAD,
+                TurretConstants.OPERATING_MAX_RAD);
+        desired = AngleUtil.clamp(
+                desired,
                 TurretConstants.PHYSICAL_MIN_RAD,
                 TurretConstants.PHYSICAL_MAX_RAD);
 
         // Do not wrap this error. The short wrap can point through the rear deadzone.
-        // Both angles already lie inside the mechanical travel, so their difference
-        // is the path that stays between the stops.
+        // The commanded angle stays in the operating window, so the raw difference
+        // moves the turret toward that window instead of across the stop.
         double error = desired - state.turretAngle;
 
         double errorRate = 0.0;
@@ -59,9 +66,15 @@ public class TurretController {
         lastErrorRad = error;
         hasLastError = true;
 
-        // Counter-rotate the turret when the chassis is spun, including a collision.
-        // Translation changes the bearing too; position feedback covers that for now.
-        double desiredVelocity = -state.robotAngularVelocity;
+        // Turret goal is bearing - heading, so its rate is bearing rate minus chassis yaw.
+        // Bearing rate covers strafing past a fixed target. Yaw covers a collision spin.
+        double dx = state.targetX - state.robotX;
+        double dy = state.targetY - state.robotY;
+        double desiredVelocity = AngleUtil.bearingRate(dx, dy, state.robotVx, state.robotVy)
+                - state.robotAngularVelocity;
+        if (!Double.isFinite(desiredVelocity)) {
+            desiredVelocity = 0.0;
+        }
 
         double power = (TurretConstants.KP * error)
                 + (TurretConstants.KD * errorRate)
@@ -75,7 +88,11 @@ public class TurretController {
                 TurretConstants.MAX_MOTOR_POWER);
         power = blockPowerIntoStop(state.turretAngle, power);
 
-        double chassisOmega = requestedChassisOmega(desired);
+        boolean unwindActive = updateUnwindLatch(desired);
+        double chassisOmega = 0.0;
+        if (unwindActive) {
+            chassisOmega = requestedChassisOmega(desired);
+        }
 
         return new TurretCommand(
                 bearing,
@@ -85,30 +102,30 @@ public class TurretController {
                 power,
                 chassisOmega,
                 choice.reachable,
-                Math.abs(desired) > TurretConstants.UNWIND_START_RAD);
+                unwindActive);
     }
 
     /**
-     * Prefer a 2π-equivalent aim inside the physical travel, closest to where
-     * the turret already is. If the whole family sits in the rear deadzone,
-     * hold the nearer physical stop instead of commanding through it.
+     * Prefer a 2π-equivalent aim inside the operating window, closest to where
+     * the turret already is. If none fits, hold the nearer operating boundary
+     * and let chassis unwind bring the target back in. Do not aim at a physical stop.
      */
     private static AngleChoice chooseReachableAngle(double idealWrapped, double currentAngle) {
         AngleUtil.EquivalentAngle match = AngleUtil.closestEquivalentInInterval(
                 idealWrapped,
                 currentAngle,
-                TurretConstants.PHYSICAL_MIN_RAD,
-                TurretConstants.PHYSICAL_MAX_RAD);
+                TurretConstants.OPERATING_MIN_RAD,
+                TurretConstants.OPERATING_MAX_RAD);
         if (match.reachable) {
             return new AngleChoice(match.angleRad, true);
         }
-        return new AngleChoice(nearestStop(idealWrapped), false);
+        return new AngleChoice(nearestOperatingBoundary(idealWrapped), false);
     }
 
-    /** Closer physical stop, measured the short way around the circle. */
-    private static double nearestStop(double idealWrapped) {
-        double min = TurretConstants.PHYSICAL_MIN_RAD;
-        double max = TurretConstants.PHYSICAL_MAX_RAD;
+    /** Closer operating boundary, measured the short way around the circle. */
+    private static double nearestOperatingBoundary(double idealWrapped) {
+        double min = TurretConstants.OPERATING_MIN_RAD;
+        double max = TurretConstants.OPERATING_MAX_RAD;
         double distanceToMin = Math.abs(AngleUtil.wrapRadians(idealWrapped - min));
         double distanceToMax = Math.abs(AngleUtil.wrapRadians(idealWrapped - max));
         if (distanceToMin <= distanceToMax) {
@@ -118,13 +135,30 @@ public class TurretController {
     }
 
     /**
-     * Continuous unwind. Zero at the soft start, then proportional to how far
+     * Enter at {@link TurretConstants#UNWIND_ENTER_RAD}, stay on until the command
+     * is back inside {@link TurretConstants#UNWIND_EXIT_RAD}. The chassis request
+     * itself still grows only past the enter angle, so latching does not step the omega.
+     */
+    private boolean updateUnwindLatch(double desiredTurretAngle) {
+        double magnitude = Math.abs(desiredTurretAngle);
+        if (unwindLatched) {
+            if (magnitude <= TurretConstants.UNWIND_EXIT_RAD) {
+                unwindLatched = false;
+            }
+        } else if (magnitude >= TurretConstants.UNWIND_ENTER_RAD) {
+            unwindLatched = true;
+        }
+        return unwindLatched;
+    }
+
+    /**
+     * Continuous unwind. Zero at the enter angle, then proportional to how far
      * the commanded angle sits past it, clamped to a maximum rate.
      * Sign matches the turret angle: positive chassis yaw reduces a positive
      * turret angle because desired turret = wrap(bearing - heading).
      */
     private static double requestedChassisOmega(double desiredTurretAngle) {
-        double excess = Math.abs(desiredTurretAngle) - TurretConstants.UNWIND_START_RAD;
+        double excess = Math.abs(desiredTurretAngle) - TurretConstants.UNWIND_ENTER_RAD;
         if (excess <= 0.0) {
             return 0.0;
         }
@@ -150,6 +184,8 @@ public class TurretController {
                 && finite(state.robotX)
                 && finite(state.robotY)
                 && finite(state.robotHeading)
+                && finite(state.robotVx)
+                && finite(state.robotVy)
                 && finite(state.robotAngularVelocity)
                 && finite(state.turretAngle)
                 && finite(state.turretVelocity)
@@ -163,6 +199,10 @@ public class TurretController {
         if (state != null && finite(state.turretAngle)) {
             hold = AngleUtil.clamp(
                     state.turretAngle,
+                    TurretConstants.OPERATING_MIN_RAD,
+                    TurretConstants.OPERATING_MAX_RAD);
+            hold = AngleUtil.clamp(
+                    hold,
                     TurretConstants.PHYSICAL_MIN_RAD,
                     TurretConstants.PHYSICAL_MAX_RAD);
         }

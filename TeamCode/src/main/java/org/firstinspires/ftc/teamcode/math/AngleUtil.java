@@ -73,6 +73,27 @@ public final class AngleUtil {
     }
 
     /**
+     * How fast the field bearing to a fixed target is changing, in rad/s.
+     * {@code dx} and {@code dy} are target minus robot. Robot velocity is field-frame.
+     * Returns 0 when the target is too close for that rate to be meaningful.
+     *
+     * <p>{@code (dy * robotVx - dx * robotVy) / (dx² + dy²)}
+     */
+    public static double bearingRate(double dx, double dy, double robotVx, double robotVy) {
+        double radiusSquared = (dx * dx) + (dy * dy);
+        if (!(radiusSquared > 1.0e-8)
+                || !Double.isFinite(robotVx)
+                || !Double.isFinite(robotVy)) {
+            return 0.0;
+        }
+        double rate = ((dy * robotVx) - (dx * robotVy)) / radiusSquared;
+        if (!Double.isFinite(rate)) {
+            return 0.0;
+        }
+        return rate;
+    }
+
+    /**
      * Among angles equal to {@code angleRad + 2πk}, picks the one inside
      * [{@code minRad}, {@code maxRad}] closest to {@code currentRad}.
      * At most a few candidates exist for a turret with less than one full turn of travel.

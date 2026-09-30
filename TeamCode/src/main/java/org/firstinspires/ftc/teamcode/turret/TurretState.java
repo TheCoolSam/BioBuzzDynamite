@@ -13,6 +13,12 @@ public class TurretState {
     public double robotX;
     public double robotY;
     public double robotHeading;
+
+    /** Field-frame robot velocity. Same distance unit as x/y, per second. */
+    public double robotVx;
+    public double robotVy;
+
+    /** Chassis yaw rate, rad/s. Positive is counterclockwise. */
     public double robotAngularVelocity;
     public double turretAngle;
     public double turretVelocity;

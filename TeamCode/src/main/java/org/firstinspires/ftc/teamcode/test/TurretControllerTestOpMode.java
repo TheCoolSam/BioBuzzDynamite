@@ -27,10 +27,11 @@ import org.firstinspires.ftc.teamcode.turret.TurretState;
  *   <li>Start: toggle applying requested chassis omega to the simulated heading.</li>
  *   <li>A: stationary robot at (0, 0), heading 0, target (1, 0). Expect turret 0.</li>
  *   <li>B: same target, heading +90 deg. Expect turret about -90 deg.</li>
- *   <li>X: turret sitting at +164 deg, target at -164 deg. Must take the long legal path.</li>
+ *   <li>X: turret sitting at +164 deg, target at -164 deg. Holds the operating boundary
+ *       and takes the long path, not the shortcut through the rear stop.</li>
  *   <li>Dpad left / right: heading near +179 / -179 deg with the target on +X.</li>
  *   <li>Y: target about +150 deg. Unwind becomes active.</li>
- *   <li>Dpad down: target about +175 deg. That aim is in the rear deadzone.</li>
+ *   <li>Dpad down: target about +175 deg. Holds the operating boundary, not the physical stop.</li>
  * </ul>
  */
 @TeleOp(name = "Turret: Tracking Test", group = "Turret")
@@ -54,6 +55,8 @@ public class TurretControllerTestOpMode extends OpMode {
     private double robotY = 0.0;
     private double robotHeading = 0.0;
     private double robotOmega = 0.0;
+    private double robotVx = 0.0;
+    private double robotVy = 0.0;
     private double targetX = 1.0;
     private double targetY = 0.0;
 
@@ -105,11 +108,16 @@ public class TurretControllerTestOpMode extends OpMode {
         if (!preset) {
             integrateRobot(dt);
             moveTarget(dt);
+        } else {
+            robotVx = 0.0;
+            robotVy = 0.0;
         }
 
         state.robotX = robotX;
         state.robotY = robotY;
         state.robotHeading = robotHeading;
+        state.robotVx = robotVx;
+        state.robotVy = robotVy;
         state.robotAngularVelocity = robotOmega;
         state.turretAngle = turret.getAngleRad();
         state.turretVelocity = turret.getVelocityRadPerSec();
@@ -179,8 +187,10 @@ public class TurretControllerTestOpMode extends OpMode {
     private void integrateRobot(double dt) {
         double stickX = deadband(gamepad1.left_stick_x);
         double stickY = deadband(-gamepad1.left_stick_y);
-        robotX += stickX * TRANSLATE_SPEED * dt;
-        robotY += stickY * TRANSLATE_SPEED * dt;
+        robotVx = stickX * TRANSLATE_SPEED;
+        robotVy = stickY * TRANSLATE_SPEED;
+        robotX += robotVx * dt;
+        robotY += robotVy * dt;
 
         double omega = deadband(gamepad1.right_stick_x) * HEADING_STICK_RATE;
         if (gamepad1.dpad_up) {

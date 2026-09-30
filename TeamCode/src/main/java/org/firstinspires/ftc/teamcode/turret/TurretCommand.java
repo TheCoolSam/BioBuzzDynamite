@@ -10,15 +10,18 @@ public class TurretCommand {
     /** Field bearing from the robot to the target, radians. */
     public final double targetBearing;
 
-    /** Robot-relative angle the turret should hold, clamped inside the physical stops. */
+    /**
+     * Robot-relative angle the turret should hold.
+     * Kept inside the operating window. The physical stops are only a final clamp.
+     */
     public final double desiredTurretAngle;
 
     /** desiredTurretAngle - measured turret angle, not wrapped. Radians. */
     public final double turretAngleError;
 
     /**
-     * Turret rate that holds the field aim against chassis yaw.
-     * Approximately the opposite of robot angular velocity.
+     * Turret rate that holds the field aim.
+     * Field bearing rate minus chassis angular velocity.
      */
     public final double desiredTurretVelocity;
 
@@ -27,10 +30,13 @@ public class TurretCommand {
     /** Chassis yaw rate that walks the turret angle back toward center, rad/s. */
     public final double requestedChassisOmega;
 
-    /** False when no 2π-equivalent aim fits inside the physical travel. */
+    /** False when no 2π-equivalent aim fits inside the operating window. */
     public final boolean targetReachable;
 
-    /** True while the commanded turret angle is past the soft unwind start. */
+    /**
+     * Latches on past the unwind enter angle and stays on until the command
+     * is back inside the exit angle.
+     */
     public final boolean unwindActive;
 
     public TurretCommand(
