@@ -4,8 +4,8 @@ package org.firstinspires.ftc.teamcode.turret;
  * One control-cycle snapshot. The controller does not read an OpMode or a gamepad.
  * Fill this from localization, the turret encoder, and the chosen field target.
  *
- * <p>Distances are in whatever field unit localization uses, as long as robot and
- * target positions share that unit. Angles are radians in the
+ * <p>When the robot fields are filled from {@code RobotState}, distances are inches
+ * and the target must use inches too. Angles are radians in the
  * {@link org.firstinspires.ftc.teamcode.math.AngleUtil} frame.
  */
 public class TurretState {
