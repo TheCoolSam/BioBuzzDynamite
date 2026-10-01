@@ -5,6 +5,7 @@ import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
 import org.firstinspires.ftc.teamcode.planning.pickup.CaptureGeometry;
 import org.firstinspires.ftc.teamcode.planning.pickup.EuclideanTravelTimeModel;
 import org.firstinspires.ftc.teamcode.planning.pickup.FixedShotSetupModel;
+import org.firstinspires.ftc.teamcode.planning.pickup.FieldBoundsCaptureFeasibility;
 import org.firstinspires.ftc.teamcode.planning.pickup.MapTipModel;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlan;
 import org.firstinspires.ftc.teamcode.planning.pickup.PickupPlanner;
@@ -247,7 +248,7 @@ public final class PickupPlannerScenarios {
                 Arrays.asList(stale),
                 5.0,
                 null);
-        check(ignored.getDecision() == PickupPlan.Decision.SHOOT_NOW, "G drops a stale detection");
+        check(ignored.getDecision() == PickupPlan.Decision.WAIT, "G empty robot waits after dropping stale detection");
         check(!containsId(ignored, 9), "G stale id is absent");
     }
 
@@ -701,7 +702,10 @@ public final class PickupPlannerScenarios {
     }
 
     private static PickupPlanner planner(MapTipModel tips, ShotSetupTimeModel shots) {
-        return new PickupPlanner(tips, new EuclideanTravelTimeModel(), shots);
+        // These historical cost/ranking fixtures use negative and >144-inch
+        // coordinates. Keep their synthetic domain explicit, with no CAD claims.
+        return new PickupPlanner(tips, new EuclideanTravelTimeModel(), shots,
+                new FieldBoundsCaptureFeasibility(-300, -300, 600, 600, 0, 0));
     }
 
     private static double distanceToShot(PickupPlan plan, PreferredPoseShotSetup.ShotPose shot) {

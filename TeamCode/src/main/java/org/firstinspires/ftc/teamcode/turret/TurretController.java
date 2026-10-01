@@ -20,12 +20,16 @@ public class TurretController {
 
     private double lastErrorRad = 0.0;
     private boolean hasLastError = false;
-    private boolean unwindLatched = false;
+    /** One recovery state owns both branch commitment and unwind hysteresis. */
+    private enum RecoverySide { NONE, POSITIVE, NEGATIVE }
+    private RecoverySide recoverySide = RecoverySide.NONE;
+    private double lastUnwindMagnitude;
 
     public void reset() {
         lastErrorRad = 0.0;
         hasLastError = false;
-        unwindLatched = false;
+        recoverySide = RecoverySide.NONE;
+        lastUnwindMagnitude = 0.0;
     }
 
     public TurretCommand calculate(TurretState state) {
@@ -94,10 +98,10 @@ public class TurretController {
                 TurretConstants.MAX_MOTOR_POWER);
         power = blockPowerIntoStop(state.turretAngle, power);
 
-        boolean unwindActive = updateUnwindLatch(desired);
+        boolean unwindActive = recoverySide != RecoverySide.NONE;
         double chassisOmega = 0.0;
         if (unwindActive) {
-            chassisOmega = requestedChassisOmega(desired);
+            chassisOmega = requestedChassisOmega(ideal, choice, state.dt);
         }
 
         return new TurretCommand(
@@ -114,27 +118,55 @@ public class TurretController {
 
     /**
      * Prefer a 2π-equivalent aim inside the operating window, closest to where
-     * the turret already is. If none fits, hold the nearer operating boundary
-     * and let chassis unwind bring the target back in. Do not aim at a physical stop.
+     * the turret already is. Recovery commits to a side until both the target
+     * geometry and measured turret are inside the exit region. Raw angle moves
+     * between ordinary legal targets stay in the operating interval (via front).
      */
-    private static AngleChoice chooseReachableAngle(double idealWrapped, double currentAngle) {
+    private AngleChoice chooseReachableAngle(double idealWrapped, double currentAngle) {
         AngleUtil.EquivalentAngle match = AngleUtil.closestEquivalentInInterval(
                 idealWrapped,
                 currentAngle,
                 TurretConstants.OPERATING_MIN_RAD,
                 TurretConstants.OPERATING_MAX_RAD);
-        if (match.reachable) {
+        if (recoverySide == RecoverySide.NONE) {
+            if (match.reachable && Math.abs(match.angleRad) < TurretConstants.UNWIND_ENTER_RAD) {
+                return new AngleChoice(match.angleRad, true);
+            }
+            // For an unreachable target choose the legal boundary requiring the
+            // least encoder travel through the front, rather than through the rear.
+            double selected = match.reachable ? match.angleRad
+                    : nearestOperatingBoundary(idealWrapped, currentAngle);
+            recoverySide = selected >= 0.0 ? RecoverySide.POSITIVE : RecoverySide.NEGATIVE;
+            lastUnwindMagnitude = 0.0;
+        }
+
+        boolean positive = recoverySide == RecoverySide.POSITIVE;
+        boolean interior = match.reachable && Math.abs(match.angleRad) <= TurretConstants.UNWIND_EXIT_RAD;
+        if (interior && Math.abs(currentAngle) <= TurretConstants.UNWIND_EXIT_RAD) {
+            recoverySide = RecoverySide.NONE;
+            lastUnwindMagnitude = 0.0;
             return new AngleChoice(match.angleRad, true);
         }
-        return new AngleChoice(nearestOperatingBoundary(idealWrapped), false);
+        // Resume legal tracking on our side as the chassis recovers. An interior
+        // target on either side can also be reached safely via the front; wait
+        // for the measured turret to settle before releasing the recovery state.
+        if (match.reachable && (interior || (positive ? match.angleRad >= 0 : match.angleRad <= 0))) {
+            return new AngleChoice(match.angleRad, true);
+        }
+        return new AngleChoice(positive ? TurretConstants.OPERATING_MAX_RAD
+                : TurretConstants.OPERATING_MIN_RAD, false);
     }
 
-    /** Closer operating boundary, measured the short way around the circle. */
-    private static double nearestOperatingBoundary(double idealWrapped) {
+    /** Prefer measured encoder travel; circular target distance only breaks a tie. */
+    private static double nearestOperatingBoundary(double idealWrapped, double currentAngle) {
         double min = TurretConstants.OPERATING_MIN_RAD;
         double max = TurretConstants.OPERATING_MAX_RAD;
-        double distanceToMin = Math.abs(AngleUtil.wrapRadians(idealWrapped - min));
-        double distanceToMax = Math.abs(AngleUtil.wrapRadians(idealWrapped - max));
+        double distanceToMin = Math.abs(currentAngle - min);
+        double distanceToMax = Math.abs(currentAngle - max);
+        if (Math.abs(distanceToMin - distanceToMax) <= 1e-9) {
+            distanceToMin = Math.abs(AngleUtil.wrapRadians(idealWrapped - min));
+            distanceToMax = Math.abs(AngleUtil.wrapRadians(idealWrapped - max));
+        }
         if (distanceToMin <= distanceToMax) {
             return min;
         }
@@ -142,38 +174,30 @@ public class TurretController {
     }
 
     /**
-     * Enter at {@link TurretConstants#UNWIND_ENTER_RAD}, stay on until the command
-     * is back inside {@link TurretConstants#UNWIND_EXIT_RAD}. The chassis request
-     * itself still grows only past the enter angle, so latching does not step the omega.
+     * Recover toward a point half the hysteresis gap inside EXIT, so finite
+     * execution crosses EXIT rather than asymptotically stopping there. Lift an
+     * unreachable wrapped bearing onto the committed side of the rear sector;
+     * ±pi noise cannot reverse yaw. Ramp increases to avoid an entry power step.
      */
-    private boolean updateUnwindLatch(double desiredTurretAngle) {
-        double magnitude = Math.abs(desiredTurretAngle);
-        if (unwindLatched) {
-            if (magnitude <= TurretConstants.UNWIND_EXIT_RAD) {
-                unwindLatched = false;
-            }
-        } else if (magnitude >= TurretConstants.UNWIND_ENTER_RAD) {
-            unwindLatched = true;
+    private double requestedChassisOmega(double idealWrapped, AngleChoice choice, double dt) {
+        double sign = recoverySide == RecoverySide.POSITIVE ? 1.0 : -1.0;
+        double recoveryAngle = choice.angleRad;
+        if (!choice.reachable) {
+            recoveryAngle = idealWrapped;
+            if (sign * recoveryAngle < 0.0) recoveryAngle += sign * AngleUtil.TAU;
         }
-        return unwindLatched;
-    }
-
-    /**
-     * Continuous unwind. Zero at the enter angle, then proportional to how far
-     * the commanded angle sits past it, clamped to a maximum rate.
-     * Sign matches the turret angle: positive chassis yaw reduces a positive
-     * turret angle because desired turret = wrap(bearing - heading).
-     */
-    private static double requestedChassisOmega(double desiredTurretAngle) {
-        double excess = Math.abs(desiredTurretAngle) - TurretConstants.UNWIND_ENTER_RAD;
-        if (excess <= 0.0) {
-            return 0.0;
-        }
+        double interiorTarget = Math.max(0.0, TurretConstants.UNWIND_EXIT_RAD
+                - 0.5 * (TurretConstants.UNWIND_ENTER_RAD - TurretConstants.UNWIND_EXIT_RAD));
+        double excess = sign * recoveryAngle - interiorTarget;
         double magnitude = AngleUtil.clamp(
                 excess * TurretConstants.UNWIND_KP,
                 0.0,
                 TurretConstants.MAX_REQUESTED_CHASSIS_OMEGA);
-        return Math.copySign(magnitude, desiredTurretAngle);
+        double rampDt = AngleUtil.clamp(dt, 0.0, MAX_DT_FOR_DERIVATIVE);
+        magnitude = Math.min(magnitude, lastUnwindMagnitude
+                + TurretConstants.UNWIND_OMEGA_RAMP_RAD_PER_SEC2 * rampDt);
+        lastUnwindMagnitude = magnitude;
+        return sign * magnitude;
     }
 
     private static double blockPowerIntoStop(double turretAngle, double power) {

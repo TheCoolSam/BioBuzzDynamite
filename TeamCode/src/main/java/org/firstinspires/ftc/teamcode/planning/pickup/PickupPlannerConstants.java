@@ -61,6 +61,10 @@ public final class PickupPlannerConstants {
      */
     public static final double CAPTURE_LEAD_INCHES = 6.0;
 
+    /** Nominal V0 field bounds, with origin at its lower-left corner, in inches. */
+    public static final double FIELD_WIDTH_INCHES = 144.0;
+    public static final double FIELD_HEIGHT_INCHES = 144.0;
+
     /**
      * Drop a detection older than this. Placeholder. A future tracker can
      * coast a piece longer if it wants the planner to keep it.

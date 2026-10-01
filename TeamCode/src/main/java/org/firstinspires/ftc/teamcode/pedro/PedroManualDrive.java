@@ -17,7 +17,8 @@ import com.pedropathing.math.Pose;
  * which is +Y for a robot facing +X. Turn is passed through unchanged.
  *
  * <p>Does not call {@link Follower#update()} and does not read turret unwind.
- * A non-finite command or heading is refused so NaN never reaches the motors.
+ * A non-finite command or pose is refused and replaces the previous manual
+ * demand with zero. The caller still runs its normal {@link Follower#update()}.
  */
 public final class PedroManualDrive {
 
@@ -36,11 +37,14 @@ public final class PedroManualDrive {
             return false;
         }
         Pose pose = follower.pose();
-        if (pose == null || !Double.isFinite(pose.heading())) {
+        if (pose == null || !Double.isFinite(pose.x()) || !Double.isFinite(pose.y())
+                || !Double.isFinite(pose.heading())) {
+            follower.manual(DrivePowers.zero());
             return false;
         }
         DrivePowers powers = powers(fieldX, fieldY, chassisOmega, pose.heading());
         if (powers == null) {
+            follower.manual(DrivePowers.zero());
             return false;
         }
         follower.manual(powers);

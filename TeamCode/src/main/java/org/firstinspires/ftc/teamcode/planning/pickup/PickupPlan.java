@@ -8,6 +8,8 @@ import java.util.List;
  * The route the planner wants, or an explicit decision to shoot without driving.
  * Targets are capture poses in field inches. A path follower consumes this
  * later. This object does not command motors.
+ * SHOOT_NOW is strategic intent only. A future executor may fire a feeder only
+ * when SHOOT_NOW AND staged-piece-confirmed AND shooter-ready are all true.
  */
 public final class PickupPlan {
 
@@ -16,6 +18,8 @@ public final class PickupPlan {
         SHOOT_NOW,
         /** Drive the capture poses in order, then set up the shot from the last one. */
         PICKUP,
+        /** Valid input, but no feasible route with positive scoring value. Search/wait. */
+        WAIT,
         /** Pose is unusable. Do not move as if the robot were at the origin. */
         INVALID
     }

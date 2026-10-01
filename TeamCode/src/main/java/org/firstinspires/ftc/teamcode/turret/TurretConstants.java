@@ -34,24 +34,27 @@ public final class TurretConstants {
 
     /**
      * Unwind latches on once the commanded turret angle passes this.
-     * About 140 degrees. The chassis request grows only past this angle.
+     * About 140 degrees. Once latched, recovery continues inside the exit angle.
      */
     public static final double UNWIND_ENTER_RAD = Math.toRadians(140.0);
 
     /**
-     * Unwind stays latched until the commanded angle is back inside this.
+     * Unwind stays latched until target geometry and measured turret are inside this.
      * About 130 degrees. Stops the request from flickering around the enter angle.
      */
     public static final double UNWIND_EXIT_RAD = Math.toRadians(130.0);
 
     /**
      * Chassis radians per second requested per radian of turret angle past
-     * {@link #UNWIND_ENTER_RAD}. Placeholder.
+     * the interior recovery target below {@link #UNWIND_EXIT_RAD}. Placeholder.
      */
     public static final double UNWIND_KP = 3.0;
 
     /** Largest chassis yaw rate this controller will request, in rad/s. Placeholder. */
     public static final double MAX_REQUESTED_CHASSIS_OMEGA = 2.0;
+
+    /** Limits increases in requested yaw; rad/s per second. Placeholder, untuned. */
+    public static final double UNWIND_OMEGA_RAMP_RAD_PER_SEC2 = 4.0;
 
     /** Position gain, power per radian of turret error. Placeholder, not tuned. */
     public static final double KP = 2.0;

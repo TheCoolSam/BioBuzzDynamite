@@ -57,11 +57,25 @@ public final class PickupPlanner {
     private final TipModel tipModel;
     private final TravelTimeModel travel;
     private final ShotSetupTimeModel shotSetup;
+    private final CaptureFeasibilityModel feasibility;
 
+    /**
+     * Nominal field center bounds only, with zero wall clearance because CAD is
+     * unavailable. Before hardware execution inject measured robot clearance
+     * using the four-argument constructor; zero is not a certified body footprint.
+     */
     public PickupPlanner(TipModel tipModel, TravelTimeModel travel, ShotSetupTimeModel shotSetup) {
+        this(tipModel, travel, shotSetup, new FieldBoundsCaptureFeasibility(
+                PickupPlannerConstants.FIELD_WIDTH_INCHES, PickupPlannerConstants.FIELD_HEIGHT_INCHES, 0, 0));
+    }
+
+    public PickupPlanner(TipModel tipModel, TravelTimeModel travel, ShotSetupTimeModel shotSetup,
+            CaptureFeasibilityModel feasibility) {
         this.tipModel = tipModel;
         this.travel = travel;
         this.shotSetup = shotSetup;
+        if (feasibility == null) throw new IllegalArgumentException("Capture feasibility model required");
+        this.feasibility = feasibility;
     }
 
     /**
@@ -281,12 +295,14 @@ public final class PickupPlanner {
 
         for (int i = 0; i < length; i++) {
             TrackedPiece piece = candidates.get(order[i]);
-            PickupTarget target = CaptureGeometry.through(
+            PickupTarget target = CaptureGeometry.feasibleThrough(
                     piece,
                     x,
                     y,
                     heading,
-                    PickupPlannerConstants.CAPTURE_LEAD_INCHES);
+                    PickupPlannerConstants.CAPTURE_LEAD_INCHES,
+                    feasibility);
+            if (target == null) return null; // Hard rejection, never a large cost penalty.
             time += travelSeconds(x, y, heading, target);
             targets.add(target);
             load = load.plus(piece.getType());
@@ -306,6 +322,11 @@ public final class PickupPlanner {
         double cycle = Math.max(PickupPlannerConstants.MINIMUM_CYCLE_SEC, total);
         double tip = tipProbability(load);
         double utility = (PickupPlannerConstants.TIP_POINTS * tip * planConfidence) / cycle;
+        if (load.total() == 0 || tip <= 0.0 || !Double.isFinite(utility) || utility <= 0.0) {
+            if (length != 0) return null; // A longer route may still create a useful load.
+            return PickupPlan.of(PickupPlan.Decision.WAIT, Collections.<PickupTarget>emptyList(), held,
+                    0, 0, 1, 0, robot.getFieldX(), robot.getFieldY(), robot.getHeadingRad());
+        }
         PickupPlan.Decision decision = length == 0
                 ? PickupPlan.Decision.SHOOT_NOW
                 : PickupPlan.Decision.PICKUP;
@@ -335,6 +356,9 @@ public final class PickupPlanner {
     }
 
     private double tipProbability(BallLoad load) {
+        // TODO: TipModel's scalar API (including MapTipModel's zero default)
+        // cannot distinguish unavailable model data from explicitly measured zero.
+        // Both cause WAIT unless some route has a positive evaluated load.
         if (tipModel == null) {
             return 0.0;
         }
@@ -349,6 +373,7 @@ public final class PickupPlanner {
     }
 
     private static boolean better(PickupPlan candidate, PickupPlan incumbent) {
+        if (candidate == null) return false;
         if (candidate.getUtility() > incumbent.getUtility() + TIE_EPSILON) {
             return true;
         }
@@ -387,6 +412,7 @@ public final class PickupPlanner {
             return best;
         }
         PickupPlan refreshed = score(robot, held, candidates, order, order.length);
+        if (refreshed == null) return best; // Includes newly infeasible committed approaches.
         double required = refreshed.getUtility() * (1.0 + PickupPlannerConstants.REPLAN_IMPROVEMENT_THRESHOLD);
         if (best.getUtility() > required + TIE_EPSILON) {
             return best;
