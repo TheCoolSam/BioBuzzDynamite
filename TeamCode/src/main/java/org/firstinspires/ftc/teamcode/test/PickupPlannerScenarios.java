@@ -456,6 +456,17 @@ public final class PickupPlannerScenarios {
         near(shoot.getEstimatedSeconds(), expected, 1e-9, "M time is the shot model");
         check(shoot.getEstimatedSeconds() > 2.0, "M is not a 0.25 second cycle");
 
+        PreferredPoseShotSetup overlapping = new PreferredPoseShotSetup(
+                new PreferredPoseShotSetup.ShotPose[] {
+                        new PreferredPoseShotSetup.ShotPose(80.0, 0.0, Math.PI / 2.0)
+                },
+                40.0,
+                Math.PI,
+                0.80);
+        double overlapped = overlapping.estimateSeconds(0.0, 0.0, 0.0, BallLoad.empty());
+        near(overlapped, 2.80, 1e-9, "M translation and yaw overlap, so the shot uses the slower one");
+        check(overlapped < 3.2, "M does not add translation and yaw");
+
         MapTipModel partial = new MapTipModel().set(0, 2, 0.30).set(0, 3, 0.90);
         PickupPlanner acquiring = planner(partial, new PreferredPoseShotSetup(
                 new PreferredPoseShotSetup.ShotPose(80.0, 0.0, 0.0)));

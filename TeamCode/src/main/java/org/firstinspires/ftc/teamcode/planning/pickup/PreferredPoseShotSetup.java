@@ -7,8 +7,10 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Straight-line time from the route endpoint to the nearest injected scoring
- * pose, plus a fixed shot delay.
+ * Time from the route endpoint to the nearest injected scoring pose, plus a
+ * fixed shot delay. Mecanum can translate and yaw together, so the move is
+ * the slower of those two, not their sum:
+ * {@code max(translation, rotation) + shot}.
  *
  * <p>The poses are placeholders supplied by the caller. This class does not
  * know where the HIVE is. {@link BallLoad} is accepted and ignored so a later
@@ -92,7 +94,7 @@ public final class PreferredPoseShotSetup implements ShotSetupTimeModel {
             double distance = Math.hypot(pose.x - robotX, pose.y - robotY);
             double translation = distance / speedInPerSec;
             double yaw = Math.abs(AngleUtil.wrapRadians(pose.headingRad - robotHeading)) / yawRateRadPerSec;
-            double seconds = translation + yaw + shotExecutionSec;
+            double seconds = Math.max(translation, yaw) + shotExecutionSec;
             if (seconds < best) {
                 best = seconds;
             }
