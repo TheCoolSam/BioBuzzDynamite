@@ -3,11 +3,13 @@ package org.firstinspires.ftc.teamcode.planning.pickup;
 import org.firstinspires.ftc.teamcode.math.AngleUtil;
 
 /**
- * Straight-line planning time. Distance over a nominal speed, plus the time
- * to yaw onto the approach, plus a fixed intake overhead.
+ * Straight-line planning time for a mecanum drivetrain. Translation and yaw
+ * run together, so movement time is the longer of the two, then a fixed
+ * intake overhead is added. This is the same overlap used by shot setup.
+ * It is not a wheel-authority model and it is not a path.
  *
- * <p>This is not a path. It ignores walls, traffic, and mechanism limits.
- * Swap in another {@link TravelTimeModel} when a real follower exists.
+ * <p>Walls, traffic, and mechanism limits are ignored. A measured route or
+ * Pedro can replace this model later.
  */
 public final class EuclideanTravelTimeModel implements TravelTimeModel {
 
@@ -52,6 +54,6 @@ public final class EuclideanTravelTimeModel implements TravelTimeModel {
         double translation = Math.hypot(dx, dy) / speedInPerSec;
         double yaw = Math.abs(AngleUtil.wrapRadians(
                 target.getApproachHeadingRad() - startHeadingRad)) / yawRateRadPerSec;
-        return translation + yaw + acquisitionOverheadSec;
+        return Math.max(translation, yaw) + acquisitionOverheadSec;
     }
 }

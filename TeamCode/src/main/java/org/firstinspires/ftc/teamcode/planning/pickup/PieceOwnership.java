@@ -7,7 +7,12 @@ package org.firstinspires.ftc.teamcode.planning.pickup;
  * legal target even if its ownership is {@link #OPPONENT}.
  */
 public enum PieceOwnership {
+    /** Nectar that belongs to the alliance this robot is playing. */
     ALLIANCE,
+    /** Nectar that belongs to the other alliance. */
     OPPONENT,
-    NEUTRAL
+    /** A piece that is not alliance-owned, such as pollen. */
+    NEUTRAL,
+    /** Nectar seen while the robot's alliance is not known. */
+    UNKNOWN
 }

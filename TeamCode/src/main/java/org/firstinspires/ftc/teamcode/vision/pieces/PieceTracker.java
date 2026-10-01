@@ -4,10 +4,12 @@ import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
 import org.firstinspires.ftc.teamcode.planning.pickup.PieceOwnership;
 import org.firstinspires.ftc.teamcode.planning.pickup.TrackedPiece;
 import org.firstinspires.ftc.teamcode.state.RobotState;
+import org.firstinspires.ftc.teamcode.state.RobotStateHistory;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Associates floor projections with stable physical ids.
@@ -21,9 +23,11 @@ import java.util.List;
  *
  * <p>The pose applied here is the {@link RobotState} passed into
  * {@link #update}. That is the current pose, not the pose at the camera's
- * exposure time. Observation timestamps are kept so a later history buffer
- * can compensate. This class does not invent a latency number and does not
- * store pose history.
+ * exposure time. {@link RobotStateHistory} supplies the pose at
+ * {@code observationTime - configuredLatency}. Latency defaults to 0 until
+ * it is measured. A missing historical pose does not become a field piece.
+ * Observation timestamps are kept. This class does not invent a latency
+ * number and does not store pose history itself.
  *
  * <p>An invalid pose produces no planner pieces. Tracks are still aged so a
  * long outage can expire them, and new field positions are not invented.
@@ -42,10 +46,12 @@ public final class PieceTracker {
         this.constants = constants == null ? PieceTrackerConstants.defaults() : constants;
     }
 
-    public PieceTrackingResult update(List<PieceObservation> observations, RobotState robot, double nowSec) {
+    public PieceTrackingResult update(
+            List<PieceObservation> observations,
+            RobotStateHistory history,
+            double nowSec) {
         double now = Double.isFinite(nowSec) ? nowSec : 0.0;
         boolean calibrated = projection.isConfigured();
-        boolean poseUsed = poseUsable(robot);
         int rawCount = observations == null ? 0 : observations.size();
         int ignored = 0;
 
@@ -58,8 +64,8 @@ public final class PieceTracker {
                 if (observation == null || !observation.isValid()) {
                     continue;
                 }
-                BallType type = constants.typeFor(observation.getCameraId());
-                if (type == null) {
+                PieceTrackerConstants.ClassifiedPiece classified = constants.classify(observation.getCameraId());
+                if (classified == null) {
                     ignored++;
                     continue;
                 }
@@ -71,37 +77,50 @@ public final class PieceTracker {
                     robotX = Double.valueOf(floor.getXForwardInches());
                     robotY = Double.valueOf(floor.getYLeftInches());
                 }
+                double readTime = observation.getTimestampSec();
+                double captureTime = Double.isFinite(readTime)
+                        ? readTime - constants.huskyLensLatencySec
+                        : now - constants.huskyLensLatencySec;
+                Optional<RobotState> capture = history == null
+                        ? Optional.<RobotState>empty()
+                        : history.sampleAt(captureTime);
+                RobotState pose = capture.isPresent() ? capture.get() : null;
                 sightings.add(new PieceTrackingResult.Sighting(
                         observation.getCameraId(),
-                        type,
+                        classified.getType(),
                         observation.getImageX(),
                         observation.getImageY(),
                         robotX,
-                        robotY));
-                if (floor == null || !poseUsed) {
+                        robotY,
+                        readTime,
+                        captureTime,
+                        pose));
+                if (floor == null || pose == null || !pose.isPoseValid()) {
                     continue;
                 }
                 double fieldX = FieldPlacement.fieldX(
-                        robot.getFieldX(), robot.getHeadingRad(),
+                        pose.getFieldX(), pose.getHeadingRad(),
                         floor.getXForwardInches(), floor.getYLeftInches());
                 double fieldY = FieldPlacement.fieldY(
-                        robot.getFieldY(), robot.getHeadingRad(),
+                        pose.getFieldY(), pose.getHeadingRad(),
                         floor.getXForwardInches(), floor.getYLeftInches());
                 if (!Double.isFinite(fieldX) || !Double.isFinite(fieldY)) {
                     continue;
                 }
-                double seenAt = observation.getTimestampSec();
                 candidates.add(new Candidate(
-                        type,
+                        classified.getType(),
+                        classified.getOwnership(),
+                        classified.isCollectable(),
                         floor.getXForwardInches(),
                         floor.getYLeftInches(),
                         fieldX,
                         fieldY,
-                        Double.isFinite(seenAt) ? seenAt : now));
+                        Double.isFinite(readTime) ? readTime : now));
             }
         }
 
-        if (!calibrated || !poseUsed) {
+        boolean poseUsed = !candidates.isEmpty();
+        if (!calibrated) {
             for (int i = 0; i < tracks.size(); i++) {
                 tracks.get(i).matched = false;
             }
@@ -109,19 +128,18 @@ public final class PieceTracker {
             return new PieceTrackingResult(
                     new ArrayList<TrackedPiece>(),
                     sightings,
-                    calibrated,
+                    false,
                     false,
                     rawCount,
                     ignored);
         }
-
         associate(candidates, now);
         expire(now);
         return new PieceTrackingResult(
                 publish(now),
                 sightings,
                 true,
-                true,
+                poseUsed,
                 rawCount,
                 ignored);
     }
@@ -132,10 +150,13 @@ public final class PieceTracker {
         }
         boolean[] used = new boolean[candidates.size()];
         BallType[] types = BallType.values();
+        PieceOwnership[] owners = PieceOwnership.values();
         for (int typeIndex = 0; typeIndex < types.length; typeIndex++) {
-            int[] trackIndex = indexesOfType(types[typeIndex]);
-            int[] observationIndex = indexesOfObservations(candidates, types[typeIndex]);
-            int[] match = assign(trackIndex, observationIndex, candidates);
+            for (int ownerIndex = 0; ownerIndex < owners.length; ownerIndex++) {
+                int[] trackIndex = indexesOf(types[typeIndex], owners[ownerIndex]);
+                int[] observationIndex = indexesOfObservations(
+                        candidates, types[typeIndex], owners[ownerIndex]);
+                int[] match = assign(trackIndex, observationIndex, candidates);
             for (int local = 0; local < observationIndex.length; local++) {
                 if (match[local] < 0) {
                     continue;
@@ -148,6 +169,7 @@ public final class PieceTracker {
                         track.fieldY - candidate.fieldY);
                 apply(track, candidate, distance, now);
                 used[candidateIndex] = true;
+            }
             }
         }
         for (int c = 0; c < candidates.size(); c++) {
@@ -258,34 +280,41 @@ public final class PieceTracker {
                 bestAssignment);
     }
 
-    private int[] indexesOfType(BallType type) {
+    private int[] indexesOf(BallType type, PieceOwnership ownership) {
         int count = 0;
         for (int i = 0; i < tracks.size(); i++) {
-            if (tracks.get(i).type == type) {
+            Track track = tracks.get(i);
+            if (track.type == type && track.ownership == ownership) {
                 count++;
             }
         }
         int[] indexes = new int[count];
         int write = 0;
         for (int i = 0; i < tracks.size(); i++) {
-            if (tracks.get(i).type == type) {
+            Track track = tracks.get(i);
+            if (track.type == type && track.ownership == ownership) {
                 indexes[write++] = i;
             }
         }
         return indexes;
     }
 
-    private static int[] indexesOfObservations(List<Candidate> candidates, BallType type) {
+    private static int[] indexesOfObservations(
+            List<Candidate> candidates,
+            BallType type,
+            PieceOwnership ownership) {
         int count = 0;
         for (int i = 0; i < candidates.size(); i++) {
-            if (candidates.get(i).type == type) {
+            Candidate candidate = candidates.get(i);
+            if (candidate.type == type && candidate.ownership == ownership) {
                 count++;
             }
         }
         int[] indexes = new int[count];
         int write = 0;
         for (int i = 0; i < candidates.size(); i++) {
-            if (candidates.get(i).type == type) {
+            Candidate candidate = candidates.get(i);
+            if (candidate.type == type && candidate.ownership == ownership) {
                 indexes[write++] = i;
             }
         }
@@ -296,6 +325,8 @@ public final class PieceTracker {
         Track track = new Track();
         track.id = nextId++;
         track.type = candidate.type;
+        track.ownership = candidate.ownership;
+        track.collectable = candidate.collectable;
         track.robotX = candidate.robotX;
         track.robotY = candidate.robotY;
         track.fieldX = candidate.fieldX;
@@ -314,6 +345,8 @@ public final class PieceTracker {
         track.robotY = blend(track.robotY, candidate.robotY, blend);
         track.fieldX = blend(track.fieldX, candidate.fieldX, blend);
         track.fieldY = blend(track.fieldY, candidate.fieldY, blend);
+        track.ownership = candidate.ownership;
+        track.collectable = candidate.collectable;
         track.hits++;
         track.lastSeenSec = candidate.seenAt;
         track.matched = true;
@@ -348,12 +381,12 @@ public final class PieceTracker {
             pieces.add(new TrackedPiece(
                     track.id,
                     track.type,
-                    PieceOwnership.NEUTRAL,
+                    track.ownership,
                     track.fieldX,
                     track.fieldY,
                     track.confidence,
                     track.lastSeenSec,
-                    constants.collectWhenOwnershipUnknown));
+                    track.collectable));
         }
         return pieces;
     }
@@ -384,12 +417,50 @@ public final class PieceTracker {
         return new double[] { x, y };
     }
 
-    private static boolean poseUsable(RobotState robot) {
-        return robot != null
-                && robot.isPoseValid()
-                && Double.isFinite(robot.getFieldX())
-                && Double.isFinite(robot.getFieldY())
-                && Double.isFinite(robot.getHeadingRad());
+    private static final class Track {
+        private int id;
+        private BallType type;
+        private PieceOwnership ownership = PieceOwnership.NEUTRAL;
+        private boolean collectable;
+        private double robotX;
+        private double robotY;
+        private double fieldX;
+        private double fieldY;
+        private int hits;
+        private double lastSeenSec;
+        private double confidence;
+        private double matchDistance;
+        private boolean matched;
+    }
+
+    private static final class Candidate {
+        private final BallType type;
+        private final PieceOwnership ownership;
+        private final boolean collectable;
+        private final double robotX;
+        private final double robotY;
+        private final double fieldX;
+        private final double fieldY;
+        private final double seenAt;
+
+        private Candidate(
+                BallType type,
+                PieceOwnership ownership,
+                boolean collectable,
+                double robotX,
+                double robotY,
+                double fieldX,
+                double fieldY,
+                double seenAt) {
+            this.type = type;
+            this.ownership = ownership;
+            this.collectable = collectable;
+            this.robotX = robotX;
+            this.robotY = robotY;
+            this.fieldX = fieldX;
+            this.fieldY = fieldY;
+            this.seenAt = seenAt;
+        }
     }
 
     private static double blend(double previous, double sample, double alpha) {
@@ -409,44 +480,6 @@ public final class PieceTracker {
     private static final class Assignment {
         private int count = -1;
         private double squaredCost = 0.0;
-    }
-
-    private static final class Track {
-        private int id;
-        private BallType type;
-        private double robotX;
-        private double robotY;
-        private double fieldX;
-        private double fieldY;
-        private int hits;
-        private double lastSeenSec;
-        private double confidence;
-        private double matchDistance;
-        private boolean matched;
-    }
-
-    private static final class Candidate {
-        private final BallType type;
-        private final double robotX;
-        private final double robotY;
-        private final double fieldX;
-        private final double fieldY;
-        private final double seenAt;
-
-        private Candidate(
-                BallType type,
-                double robotX,
-                double robotY,
-                double fieldX,
-                double fieldY,
-                double seenAt) {
-            this.type = type;
-            this.robotX = robotX;
-            this.robotY = robotY;
-            this.fieldX = fieldX;
-            this.fieldY = fieldY;
-            this.seenAt = seenAt;
-        }
     }
 
 }

@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.test;
 
+import org.firstinspires.ftc.teamcode.match.AllianceColor;
 import org.firstinspires.ftc.teamcode.planning.pickup.BallLoad;
 import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
 import org.firstinspires.ftc.teamcode.planning.pickup.EuclideanTravelTimeModel;
@@ -10,6 +11,7 @@ import org.firstinspires.ftc.teamcode.planning.pickup.PieceOwnership;
 import org.firstinspires.ftc.teamcode.planning.pickup.TipModel;
 import org.firstinspires.ftc.teamcode.planning.pickup.TrackedPiece;
 import org.firstinspires.ftc.teamcode.state.RobotState;
+import org.firstinspires.ftc.teamcode.state.RobotStateHistory;
 import org.firstinspires.ftc.teamcode.vision.pieces.FieldPlacement;
 import org.firstinspires.ftc.teamcode.vision.pieces.FloorPoint;
 import org.firstinspires.ftc.teamcode.vision.pieces.HomographyFloorProjection;
@@ -51,6 +53,11 @@ public final class PieceTrackerScenarios {
         testInputOrderDoesNotSwapIds();
         testOneMissingFromCluster();
         testOverdeterminedCalibration();
+        testHistoricalPoseWhileMoving();
+        testConfiguredLatency();
+        testZeroLatencyUsesObservationTime();
+        testMissingHistoricalPose();
+        testAllianceOwnership();
         System.out.println("PIECE TRACKER CHECKS PASSED (" + checks + ")");
     }
 
@@ -74,8 +81,8 @@ public final class PieceTrackerScenarios {
         near(solvedPoint.getXForwardInches(), 20.0, "A solved homography keeps x");
         near(solvedPoint.getYLeftInches(), 5.0, "A solved homography keeps y");
 
-        PieceTracker lower = new PieceTracker(scale, constants(ObservationAnchor.LOWER_CENTER, 6.0, 0.5, 1.0, false));
-        PieceTrackingResult lowered = lower.update(
+        PieceTracker lower = new PieceTracker(scale, constants(ObservationAnchor.LOWER_CENTER, 6.0, 0.5, 1.0));
+        PieceTrackingResult lowered = place(lower, 
                 Arrays.asList(PieceObservation.of(1, 100.0, 40.0, 10.0, 20.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
@@ -83,8 +90,8 @@ public final class PieceTrackerScenarios {
         near(lowered.getSightings().get(0).getRobotY(), 5.0, "A lower center uses the bottom of the box");
 
         PieceTracker missing = new PieceTracker(HomographyFloorProjection.unconfigured(), constants(
-                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, false));
-        PieceTrackingResult blank = missing.update(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0));
+        PieceTrackingResult blank = place(missing, 
                 Arrays.asList(pixel(1, 100.0, 50.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
@@ -108,11 +115,11 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testStableTrack() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 0.5, false);
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 0.5);
         int id = -1;
         for (int frame = 0; frame < 10; frame++) {
             double jitter = (frame % 2 == 0) ? 0.0 : 0.4;
-            PieceTrackingResult result = tracker.update(
+            PieceTrackingResult result = place(tracker, 
                     Arrays.asList(pixel(1, 30.0 + jitter, 0.0, frame)),
                     robot(0.0, 0.0, 0.0),
                     frame);
@@ -124,8 +131,8 @@ public final class PieceTrackerScenarios {
             check(current == id, "D track id is stable");
         }
 
-        PieceTracker duplicates = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult doubled = duplicates.update(
+        PieceTracker duplicates = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult doubled = place(duplicates, 
                 Arrays.asList(pixel(1, 30.0, 0.0, 0.0), pixel(1, 31.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
@@ -134,8 +141,8 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testTwoNearbyPieces() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult result = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult result = place(tracker, 
                 Arrays.asList(pixel(1, 10.0, 0.0, 0.0), pixel(1, 40.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
@@ -144,20 +151,20 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testDisappearance() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult seen = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult seen = place(tracker, 
                 Arrays.asList(pixel(1, 12.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
         double fresh = only(seen).getConfidence();
-        PieceTrackingResult aged = tracker.update(
+        PieceTrackingResult aged = place(tracker, 
                 Arrays.asList(),
                 robot(0.0, 0.0, 0.0),
                 0.2);
         check(aged.getPieces().size() == 1, "F track remains before timeout");
         check(only(aged).getId() == only(seen).getId(), "F id survives the gap");
         check(only(aged).getConfidence() < fresh, "F confidence falls while it is missing");
-        PieceTrackingResult gone = tracker.update(
+        PieceTrackingResult gone = place(tracker, 
                 Arrays.asList(),
                 robot(0.0, 0.0, 0.0),
                 0.51);
@@ -165,13 +172,13 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testMovingBall() {
-        PieceTracker tracker = tracker(identity(), 8.0, 0.5, 0.5, false);
-        PieceTrackingResult first = tracker.update(
+        PieceTracker tracker = tracker(identity(), 8.0, 0.5, 0.5);
+        PieceTrackingResult first = place(tracker, 
                 Arrays.asList(pixel(2, 10.0, 4.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
         int id = only(first).getId();
-        PieceTrackingResult moved = tracker.update(
+        PieceTrackingResult moved = place(tracker, 
                 Arrays.asList(pixel(2, 14.0, 4.0, 0.1)),
                 robot(0.0, 0.0, 0.0),
                 0.1);
@@ -182,13 +189,13 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testWrongType() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult nectar = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult nectar = place(tracker, 
                 Arrays.asList(pixel(2, 10.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
         int nectarId = only(nectar).getId();
-        PieceTrackingResult both = tracker.update(
+        PieceTrackingResult both = place(tracker, 
                 Arrays.asList(pixel(1, 10.0, 0.0, 0.1)),
                 robot(0.0, 0.0, 0.0),
                 0.1);
@@ -199,8 +206,8 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testUnknownCameraId() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult result = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult result = place(tracker, 
                 Arrays.asList(pixel(99, 10.0, 0.0, 0.0), pixel(1, 20.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
@@ -210,8 +217,8 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testInvalidPose() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult result = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult result = place(tracker, 
                 Arrays.asList(pixel(1, 15.0, 3.0, 0.0)),
                 RobotState.invalid(0.0),
                 0.0);
@@ -222,11 +229,11 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testConfidenceMatures() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
         double first = 0.0;
         double last = 0.0;
         for (int frame = 0; frame < 5; frame++) {
-            PieceTrackingResult result = tracker.update(
+            PieceTrackingResult result = place(tracker, 
                     Arrays.asList(pixel(1, 8.0, 1.0, frame * 0.05)),
                     robot(0.0, 0.0, 0.0),
                     frame * 0.05);
@@ -241,14 +248,16 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testPlannerSeam() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, true);
-        PieceTrackingResult result = tracker.update(
+        PieceTracker tracker = new PieceTracker(identity(), configured(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, AllianceColor.RED, 0.0, true));
+        PieceTrackingResult result = place(tracker,
                 Arrays.asList(pixel(2, 24.0, 0.0, 1.0)),
                 robot(0.0, 0.0, 0.0),
                 1.0);
         TrackedPiece piece = only(result);
-        check(piece.getOwnership() == PieceOwnership.NEUTRAL, "L ownership is not invented");
-        check(piece.isCollectable(), "L this scenario allows neutral pieces");
+        check(piece.getType() == BallType.NECTAR, "L red nectar stays nectar");
+        check(piece.getOwnership() == PieceOwnership.ALLIANCE, "L red alliance owns red nectar");
+        check(piece.isCollectable(), "L our nectar is collectable");
         TipModel tips = new TipModel() {
             @Override
             public double getTipProbability(BallLoad load) {
@@ -266,8 +275,8 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testFourInchPairStaysSplit() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult created = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult created = place(tracker, 
                 Arrays.asList(pixel(1, 0.0, 0.0, 0.0), pixel(1, 4.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
@@ -275,7 +284,7 @@ public final class PieceTrackerScenarios {
         int left = nearestX(created.getPieces(), 0.0).getId();
         int right = nearestX(created.getPieces(), 4.0).getId();
         check(left != right, "the 4 inch pair has two ids");
-        PieceTrackingResult again = tracker.update(
+        PieceTrackingResult again = place(tracker, 
                 Arrays.asList(pixel(1, 4.1, 0.0, 0.05), pixel(1, 0.1, 0.0, 0.05)),
                 robot(0.0, 0.0, 0.0),
                 0.05);
@@ -285,7 +294,7 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testClusterJitterKeepsIds() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
         double[][] frames = new double[][] {
                 {0.0, 4.0, 8.0},
                 {0.4, 3.7, 8.3},
@@ -294,7 +303,7 @@ public final class PieceTrackerScenarios {
         };
         int[] ids = null;
         for (int frame = 0; frame < frames.length; frame++) {
-            PieceTrackingResult result = tracker.update(
+            PieceTrackingResult result = place(tracker, 
                     Arrays.asList(
                             pixel(1, frames[frame][0], 0.0, frame * 0.05),
                             pixel(1, frames[frame][1], 0.0, frame * 0.05),
@@ -316,15 +325,15 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testInputOrderDoesNotSwapIds() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult created = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult created = place(tracker, 
                 Arrays.asList(pixel(1, 0.0, 0.0, 0.0), pixel(1, 4.0, 0.0, 0.0), pixel(1, 8.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
         int left = nearestX(created.getPieces(), 0.0).getId();
         int middle = nearestX(created.getPieces(), 4.0).getId();
         int right = nearestX(created.getPieces(), 8.0).getId();
-        PieceTrackingResult reversed = tracker.update(
+        PieceTrackingResult reversed = place(tracker, 
                 Arrays.asList(pixel(1, 7.8, 0.0, 0.05), pixel(1, 0.2, 0.0, 0.05), pixel(1, 4.1, 0.0, 0.05)),
                 robot(0.0, 0.0, 0.0),
                 0.05);
@@ -335,15 +344,15 @@ public final class PieceTrackerScenarios {
     }
 
     private static void testOneMissingFromCluster() {
-        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0, false);
-        PieceTrackingResult created = tracker.update(
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult created = place(tracker, 
                 Arrays.asList(pixel(1, 0.0, 0.0, 0.0), pixel(1, 4.0, 0.0, 0.0), pixel(1, 8.0, 0.0, 0.0)),
                 robot(0.0, 0.0, 0.0),
                 0.0);
         int left = nearestX(created.getPieces(), 0.0).getId();
         int middle = nearestX(created.getPieces(), 4.0).getId();
         int right = nearestX(created.getPieces(), 8.0).getId();
-        PieceTrackingResult missing = tracker.update(
+        PieceTrackingResult missing = place(tracker, 
                 Arrays.asList(pixel(1, 0.2, 0.0, 0.1), pixel(1, 7.9, 0.0, 0.1)),
                 robot(0.0, 0.0, 0.0),
                 0.1);
@@ -397,6 +406,152 @@ public final class PieceTrackerScenarios {
         check(!Double.isFinite(tooFew.getRmsErrorInches()), "an unconfigured fit does not report zero RMS");
     }
 
+    /**
+     * 50 ms is a test fixture for a moving robot, not a measured HuskyLens delay.
+     * The production latency constant stays 0.
+     */
+    private static void testHistoricalPoseWhileMoving() {
+        PieceTrackerConstants knobs = configured(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, AllianceColor.UNKNOWN, 0.0, true);
+        RobotStateHistory history = new RobotStateHistory();
+        history.add(moving(0.95, 38.0));
+        history.add(moving(1.00, 40.0));
+        PieceTracker historical = new PieceTracker(identity(), knobs);
+        PieceTrackingResult past = historical.update(
+                Arrays.asList(pixel(1, 10.0, 0.0, 0.95)),
+                history,
+                1.00);
+        near(only(past).getFieldX(), 48.0, "F the piece uses the pose from 50 ms earlier");
+        check(past.getSightings().get(0).hasHistoricalPose(), "F historical pose is found");
+
+        RobotStateHistory liveHistory = new RobotStateHistory();
+        liveHistory.add(moving(1.00, 40.0));
+        PieceTracker liveTracker = new PieceTracker(identity(), knobs);
+        PieceTrackingResult live = liveTracker.update(
+                Arrays.asList(pixel(1, 10.0, 0.0, 1.00)),
+                liveHistory,
+                1.00);
+        near(only(live).getFieldX(), 50.0, "F the current pose is two inches farther along +X");
+        near(Math.abs(only(live).getFieldX() - only(past).getFieldX()), 2.0,
+                "F history and the current pose disagree by about 2 inches");
+    }
+
+    private static void testConfiguredLatency() {
+        PieceTracker tracker = new PieceTracker(identity(), configured(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, AllianceColor.UNKNOWN, 0.100, true));
+        RobotStateHistory history = new RobotStateHistory();
+        history.add(moving(10.000, 0.0));
+        history.add(moving(10.100, 4.0));
+        PieceTrackingResult result = tracker.update(
+                Arrays.asList(pixel(1, 10.0, 0.0, 10.100)),
+                history,
+                10.100);
+        PieceTrackingResult.Sighting sighting = result.getSightings().get(0);
+        check(Math.abs(sighting.getReadTimestampSec() - 10.100) < 1.0e-9, "G the read time is 10.100");
+        check(Math.abs(sighting.getCaptureTimestampSec() - 10.000) < 1.0e-6,
+                "G capture time is the read time minus the test latency");
+        check(sighting.hasHistoricalPose(), "G a pose exists at the capture time");
+        near(sighting.getHistoricalX(), 0.0, "G the pose is the one near 10.000, not 10.100");
+        near(only(result).getFieldX(), 10.0, "G the field piece follows the capture pose");
+    }
+
+    private static void testZeroLatencyUsesObservationTime() {
+        PieceTracker tracker = new PieceTracker(identity(), configured(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0,
+                AllianceColor.UNKNOWN, PieceTrackerConstants.HUSKYLENS_LATENCY_SEC, true));
+        RobotStateHistory history = new RobotStateHistory();
+        history.add(moving(5.0, 12.0));
+        history.add(moving(5.2, 20.0));
+        PieceTrackingResult result = tracker.update(
+                Arrays.asList(pixel(1, 0.0, 0.0, 5.0)),
+                history,
+                5.2);
+        PieceTrackingResult.Sighting sighting = result.getSightings().get(0);
+        near(sighting.getCaptureTimestampSec(), sighting.getReadTimestampSec(),
+                "H zero latency uses the observation timestamp");
+        near(only(result).getFieldX(), 12.0, "H the piece uses the observation-time pose");
+    }
+
+    private static void testMissingHistoricalPose() {
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult result = tracker.update(
+                Arrays.asList(pixel(1, 8.0, 1.0, 1.0)),
+                new RobotStateHistory(),
+                1.0);
+        check(result.getSightings().size() == 1, "I the raw detection is still reported");
+        check(result.getSightings().get(0).hasRobotPoint(), "I robot-floor inches still project");
+        check(!result.getSightings().get(0).hasHistoricalPose(), "I no historical pose is invented");
+        check(result.getPieces().isEmpty(), "I no planner piece is published");
+        check(!result.isPoseUsed(), "I field placement is withheld");
+    }
+
+    private static void testAllianceOwnership() {
+        TrackedPiece redOnRed = classified(AllianceColor.RED, 2);
+        check(redOnRed.getType() == BallType.NECTAR, "J red nectar is nectar");
+        check(redOnRed.getOwnership() == PieceOwnership.ALLIANCE, "J red alliance owns red nectar");
+        check(redOnRed.isCollectable(), "J our nectar is collectable");
+
+        TrackedPiece blueOnRed = classified(AllianceColor.RED, 3);
+        check(blueOnRed.getType() == BallType.NECTAR, "K blue nectar is nectar");
+        check(blueOnRed.getOwnership() == PieceOwnership.OPPONENT, "K red alliance treats blue nectar as theirs");
+        check(!blueOnRed.isCollectable(), "K their nectar is not collectable");
+
+        TrackedPiece blueOnBlue = classified(AllianceColor.BLUE, 3);
+        check(blueOnBlue.getOwnership() == PieceOwnership.ALLIANCE, "L blue alliance owns blue nectar");
+        check(blueOnBlue.isCollectable(), "L our nectar is collectable on blue");
+        TrackedPiece redOnBlue = classified(AllianceColor.BLUE, 2);
+        check(redOnBlue.getOwnership() == PieceOwnership.OPPONENT, "L blue alliance treats red nectar as theirs");
+        check(!redOnBlue.isCollectable(), "L their nectar is not collectable on blue");
+
+        TrackedPiece unknownNectar = classified(AllianceColor.UNKNOWN, 2);
+        check(unknownNectar.getType() == BallType.NECTAR, "M unknown alliance still sees nectar");
+        check(unknownNectar.getOwnership() == PieceOwnership.UNKNOWN, "M nectar ownership stays unknown");
+        check(!unknownNectar.isCollectable(), "M unknown nectar is not collectable");
+
+        TrackedPiece pollen = classified(AllianceColor.UNKNOWN, 1);
+        check(pollen.getType() == BallType.POLLEN, "N pollen stays pollen");
+        check(pollen.getOwnership() == PieceOwnership.NEUTRAL, "N pollen stays neutral");
+        check(pollen.isCollectable(), "N neutral pollen follows the collectability flag");
+
+        PieceTracker withheld = new PieceTracker(identity(), configured(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, AllianceColor.UNKNOWN, 0.0, false));
+        PieceTrackingResult held = place(withheld,
+                Arrays.asList(pixel(1, 4.0, 0.0, 0.0)),
+                robot(0.0, 0.0, 0.0),
+                0.0);
+        check(only(held).getOwnership() == PieceOwnership.NEUTRAL, "N pollen ownership does not depend on the flag");
+        check(!only(held).isCollectable(), "N pollen collectability stays configurable");
+
+        PieceTracker tracker = tracker(identity(), 6.0, 0.5, 1.0);
+        PieceTrackingResult unknownId = place(tracker,
+                Arrays.asList(pixel(9, 4.0, 0.0, 0.0)),
+                robot(0.0, 0.0, 0.0),
+                0.0);
+        check(unknownId.getPieces().isEmpty(), "O an unknown camera id is ignored");
+        check(unknownId.getIgnoredUnknownIds() == 1, "O the ignored id is counted");
+        check(unknownId.getSightings().isEmpty(), "O an unknown id is not pollen or nectar");
+    }
+
+    private static TrackedPiece classified(AllianceColor alliance, int cameraId) {
+        PieceTracker tracker = new PieceTracker(identity(), configured(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, alliance, 0.0, true));
+        PieceTrackingResult result = place(tracker,
+                Arrays.asList(pixel(cameraId, 4.0, 0.0, 0.0)),
+                robot(0.0, 0.0, 0.0),
+                0.0);
+        return only(result);
+    }
+
+    private static RobotState moving(double time, double x) {
+        return new RobotState(
+                time,
+                x, 0.0, 0.0,
+                40.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                true,
+                true);
+    }
+
     private static TrackedPiece nearestX(List<TrackedPiece> pieces, double x) {
         TrackedPiece best = null;
         double bestDistance = Double.POSITIVE_INFINITY;
@@ -417,8 +572,8 @@ public final class PieceTrackerScenarios {
                 0.0, 0.0, 1.0
         });
         PieceTracker tracker = new PieceTracker(forward, constants(
-                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0, false));
-        return tracker.update(
+                ObservationAnchor.BOUNDING_BOX_CENTER, 6.0, 0.5, 1.0));
+        return place(tracker, 
                 Arrays.asList(pixel(1, 0.0, 0.0, 0.0)),
                 robot(50.0, 50.0, heading),
                 0.0);
@@ -428,19 +583,54 @@ public final class PieceTrackerScenarios {
             HomographyFloorProjection projection,
             double gate,
             double timeout,
-            double blend,
-            boolean collect) {
+            double blend) {
         return new PieceTracker(projection, constants(
-                ObservationAnchor.BOUNDING_BOX_CENTER, gate, timeout, blend, collect));
+                ObservationAnchor.BOUNDING_BOX_CENTER, gate, timeout, blend));
     }
 
     private static PieceTrackerConstants constants(
             ObservationAnchor anchor,
             double gate,
             double timeout,
+            double blend) {
+        return configured(anchor, gate, timeout, blend, AllianceColor.UNKNOWN, 0.0, true);
+    }
+
+    private static PieceTrackerConstants configured(
+            ObservationAnchor anchor,
+            double gate,
+            double timeout,
             double blend,
-            boolean collect) {
-        return new PieceTrackerConstants(1, 2, gate, timeout, blend, 5.0, anchor, collect);
+            AllianceColor alliance,
+            double latencySec,
+            boolean collectNeutralPollen) {
+        return new PieceTrackerConstants(
+                1, 2, 3, alliance, latencySec, gate, timeout, blend, 5.0, anchor, collectNeutralPollen);
+    }
+
+    /**
+     * Existing scenarios stored the pose on a {@link RobotState} whose timestamp
+     * was 0. Latency is 0, and those observations use {@code now} as their
+     * timestamp, so the history sample is stamped at {@code now}.
+     */
+    private static PieceTrackingResult place(
+            PieceTracker tracker,
+            List<PieceObservation> observations,
+            RobotState pose,
+            double now) {
+        RobotStateHistory history = new RobotStateHistory();
+        history.add(at(pose, now));
+        return tracker.update(observations, history, now);
+    }
+
+    private static RobotState at(RobotState pose, double time) {
+        return new RobotState(
+                time,
+                pose.getFieldX(), pose.getFieldY(), pose.getHeadingRad(),
+                pose.getFieldVx(), pose.getFieldVy(), pose.getAngularVelocityRadPerSec(),
+                pose.getFieldAx(), pose.getFieldAy(), pose.getAngularAccelerationRadPerSec2(),
+                pose.isPoseValid(),
+                pose.isVelocityValid());
     }
 
     private static HomographyFloorProjection identity() {

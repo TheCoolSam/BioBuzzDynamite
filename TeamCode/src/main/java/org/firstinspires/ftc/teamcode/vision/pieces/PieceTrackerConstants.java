@@ -1,21 +1,35 @@
 package org.firstinspires.ftc.teamcode.vision.pieces;
 
+import org.firstinspires.ftc.teamcode.match.AllianceColor;
 import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
+import org.firstinspires.ftc.teamcode.planning.pickup.PieceOwnership;
 
 /**
- * Tracker knobs. Camera ids are whatever was taught on the HuskyLens.
- * They are not field geometry, and they are not scattered through the tracker.
+ * Tracker knobs and the HuskyLens id map.
  *
- * <p>The default ids are placeholders until the device is trained.
- * Alliance ownership is not inferred from those ids.
+ * <p>Ids 1, 2, and 3 are placeholders until pollen, red nectar, and blue
+ * nectar are taught on the device. They are not scattered through the tracker.
+ * {@link #HUSKYLENS_LATENCY_SEC} stays 0 until the camera delay is measured.
+ * Alliance color is configuration for this layer. The pickup planner never sees it.
  */
 public final class PieceTrackerConstants {
 
-    /** Taught HuskyLens id for {@link BallType#POLLEN}. Placeholder. */
+    /** Seconds subtracted from the read time. 0 until a measurement exists. Not a guess. */
+    public static final double HUSKYLENS_LATENCY_SEC = 0.0;
+
+    /** Taught HuskyLens id for {@link BallType#POLLEN}. Placeholder, not a trained model. */
     public final int pollenCameraId;
 
-    /** Taught HuskyLens id for {@link BallType#NECTAR}. Placeholder. */
-    public final int nectarCameraId;
+    /** Taught HuskyLens id for red nectar. Placeholder, not a trained model. */
+    public final int redNectarCameraId;
+
+    /** Taught HuskyLens id for blue nectar. Placeholder, not a trained model. */
+    public final int blueNectarCameraId;
+
+    public final AllianceColor alliance;
+
+    /** Seconds. Subtracted from each observation read time before the pose lookup. */
+    public final double huskyLensLatencySec;
 
     /** Inches. Observations farther than this from a track start a new track. */
     public final double associationGateInches;
@@ -35,23 +49,32 @@ public final class PieceTrackerConstants {
     public final ObservationAnchor anchor;
 
     /**
-     * False until a later rule says an unrecognized owner is legal to collect.
-     * The recognition mode does not know alliance color. Ownership on every
-     * track is {@link org.firstinspires.ftc.teamcode.planning.pickup.PieceOwnership#NEUTRAL}.
+     * Pollen is neutral, not an alliance piece. This flag is the collectability
+     * policy for that known case. Unknown nectar does not use it.
      */
-    public final boolean collectWhenOwnershipUnknown;
+    public final boolean collectNeutralPollen;
 
     public PieceTrackerConstants(
             int pollenCameraId,
-            int nectarCameraId,
+            int redNectarCameraId,
+            int blueNectarCameraId,
+            AllianceColor alliance,
+            double huskyLensLatencySec,
             double associationGateInches,
             double trackTimeoutSec,
             double positionBlend,
             double matureHitCount,
             ObservationAnchor anchor,
-            boolean collectWhenOwnershipUnknown) {
+            boolean collectNeutralPollen) {
         this.pollenCameraId = pollenCameraId;
-        this.nectarCameraId = nectarCameraId;
+        this.redNectarCameraId = redNectarCameraId;
+        this.blueNectarCameraId = blueNectarCameraId;
+        this.alliance = alliance == null ? AllianceColor.UNKNOWN : alliance;
+        if (!Double.isFinite(huskyLensLatencySec) || huskyLensLatencySec < 0.0) {
+            this.huskyLensLatencySec = 0.0;
+        } else {
+            this.huskyLensLatencySec = huskyLensLatencySec;
+        }
         this.associationGateInches = associationGateInches > 0.0 ? associationGateInches : 0.0;
         this.trackTimeoutSec = trackTimeoutSec > 0.0 ? trackTimeoutSec : 0.0;
         if (!Double.isFinite(positionBlend)) {
@@ -65,37 +88,75 @@ public final class PieceTrackerConstants {
         }
         this.matureHitCount = matureHitCount > 0.0 ? matureHitCount : 1.0;
         this.anchor = anchor == null ? ObservationAnchor.LOWER_CENTER : anchor;
-        this.collectWhenOwnershipUnknown = collectWhenOwnershipUnknown;
+        this.collectNeutralPollen = collectNeutralPollen;
     }
 
     /**
-     * Ids 1 and 2 are not a trained model. Gate, timeout, and blend are
-     * starting values for a small number of balls, not a fit to video.
-     * Unknown ownership is not collectable.
+     * Placeholder ids. Alliance is unknown, so nectar is not collectable.
+     * Latency is {@link #HUSKYLENS_LATENCY_SEC}.
      */
     public static PieceTrackerConstants defaults() {
         return new PieceTrackerConstants(
                 1,
                 2,
+                3,
+                AllianceColor.UNKNOWN,
+                HUSKYLENS_LATENCY_SEC,
                 6.0,
                 0.40,
                 0.65,
                 5.0,
                 ObservationAnchor.LOWER_CENTER,
-                false);
+                true);
     }
 
-    /** Null when this id was not taught as pollen or nectar. */
-    public BallType typeFor(int cameraId) {
-        if (cameraId == pollenCameraId && pollenCameraId != nectarCameraId) {
-            return BallType.POLLEN;
+    /**
+     * Maps one taught camera id. An id that matches more than one class, or
+     * none, returns null and must be ignored.
+     */
+    public ClassifiedPiece classify(int cameraId) {
+        boolean pollen = cameraId == pollenCameraId;
+        boolean red = cameraId == redNectarCameraId;
+        boolean blue = cameraId == blueNectarCameraId;
+        int hits = (pollen ? 1 : 0) + (red ? 1 : 0) + (blue ? 1 : 0);
+        if (hits != 1) {
+            return null;
         }
-        if (cameraId == nectarCameraId) {
-            return BallType.NECTAR;
+        if (pollen) {
+            return new ClassifiedPiece(BallType.POLLEN, PieceOwnership.NEUTRAL, collectNeutralPollen);
         }
-        if (cameraId == pollenCameraId) {
-            return BallType.POLLEN;
+        if (alliance == AllianceColor.UNKNOWN) {
+            return new ClassifiedPiece(BallType.NECTAR, PieceOwnership.UNKNOWN, false);
         }
-        return null;
+        boolean ours = (alliance == AllianceColor.RED && red) || (alliance == AllianceColor.BLUE && blue);
+        if (ours) {
+            return new ClassifiedPiece(BallType.NECTAR, PieceOwnership.ALLIANCE, true);
+        }
+        return new ClassifiedPiece(BallType.NECTAR, PieceOwnership.OPPONENT, false);
+    }
+
+    /** One camera class after alliance rules. Not a track. */
+    public static final class ClassifiedPiece {
+        private final BallType type;
+        private final PieceOwnership ownership;
+        private final boolean collectable;
+
+        private ClassifiedPiece(BallType type, PieceOwnership ownership, boolean collectable) {
+            this.type = type;
+            this.ownership = ownership;
+            this.collectable = collectable;
+        }
+
+        public BallType getType() {
+            return type;
+        }
+
+        public PieceOwnership getOwnership() {
+            return ownership;
+        }
+
+        public boolean isCollectable() {
+            return collectable;
+        }
     }
 }

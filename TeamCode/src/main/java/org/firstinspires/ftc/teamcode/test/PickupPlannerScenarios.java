@@ -49,6 +49,7 @@ public final class PickupPlannerScenarios {
         testShootNowUsesShotTravel();
         testNectarSurvivesAPollenCrowd();
         testPollenSurvivesANectarCrowd();
+        testTravelTimeUsesTheLongerAxis();
         System.out.println("PICKUP PLANNER CHECKS PASSED (" + checks + ")");
     }
 
@@ -161,8 +162,9 @@ public final class PickupPlannerScenarios {
 
         int[] listedOrder = new int[] {10, 20, 30};
         double listedTime = routeSeconds(robot, piecesInOrder(listed, listedOrder));
-        double plannedTime = plan.getEstimatedSeconds();
-        check(plannedTime < listedTime - 1.0e-6, "D does not keep the input order");
+        double plannedTravel = routeSeconds(robot, piecesInOrder(listed, planned));
+        check(!Arrays.equals(planned, listedOrder), "D does not keep the input order");
+        check(plannedTravel < listedTime - 1.0e-6, "D the chosen order is faster than the listed order");
     }
 
     /** A load that already tips well is not sent across the field for a tiny gain. */
@@ -413,7 +415,7 @@ public final class PickupPlannerScenarios {
         PickupPlanner planner = planner(tips, new PreferredPoseShotSetup(shot));
         RobotState robot = pose(0.0, 60.0);
         TrackedPiece farFinish = ball(1, BallType.POLLEN, 40.0, 60.0);
-        TrackedPiece nearFinish = ball(2, BallType.POLLEN, 0.0, 20.0);
+        TrackedPiece nearFinish = ball(2, BallType.POLLEN, 0.0, 10.0);
 
         double collectFar = routeSeconds(robot, Arrays.asList(farFinish));
         double collectNear = routeSeconds(robot, Arrays.asList(nearFinish));
@@ -661,6 +663,26 @@ public final class PickupPlannerScenarios {
             }
         }
         return count;
+    }
+
+    private static void testTravelTimeUsesTheLongerAxis() {
+        EuclideanTravelTimeModel model = new EuclideanTravelTimeModel(40.0, Math.PI, 0.0);
+        double translation = model.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 80.0, 0.0, 0.0));
+        near(translation, 2.0, 1.0e-9, "P 80 inches at 40 in/s is 2.0 s before intake overhead");
+
+        double yaw = model.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 0.0, 0.0, Math.PI / 2.0));
+        near(yaw, 0.5, 1.0e-9, "Q a quarter turn at pi rad/s is 0.5 s");
+
+        double together = model.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 80.0, 0.0, Math.PI / 2.0));
+        near(together, 2.0, 1.0e-9, "R simultaneous yaw does not add onto the translation");
+        check(Math.abs(together - 2.5) > 0.1, "R the estimate is not translation plus yaw");
+
+        EuclideanTravelTimeModel withIntake = new EuclideanTravelTimeModel(
+                40.0, Math.PI, PickupPlannerConstants.ACQUISITION_OVERHEAD_SEC);
+        near(withIntake.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 80.0, 0.0, Math.PI / 2.0)),
+                2.0 + PickupPlannerConstants.ACQUISITION_OVERHEAD_SEC,
+                1.0e-9,
+                "R intake overhead is added after the longer movement");
     }
 
     private static void near(double actual, double expected, double tolerance, String label) {
