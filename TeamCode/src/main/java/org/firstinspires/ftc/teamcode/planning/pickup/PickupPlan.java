@@ -93,8 +93,8 @@ public final class PickupPlan {
     }
 
     /**
-     * Same route, different stored utility. Hysteresis compares this stored
-     * number, so a committed plan does not get quietly re-scored into a switch.
+     * Same route, different reported utility. The planner re-scores commitments
+     * against current observations, so this value does not override hysteresis.
      */
     public PickupPlan withUtility(double newUtility) {
         double stored = Double.isFinite(newUtility) ? newUtility : 0.0;

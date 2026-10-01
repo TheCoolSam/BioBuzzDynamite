@@ -22,7 +22,8 @@ import java.util.List;
  * <p>This OpMode does not own localization, so the history stays empty and
  * field pieces stay withheld. The latency lines are here so a later measured
  * delay can be compared against the robot pose once a localizer is connected.
- * Camera ids 1, 2, and 3 are placeholders until the lens is trained.
+ * Camera ids 1, 2, and 3 are placeholders until yellow, red, and blue are
+ * taught in Color Recognition with Learn Multiple enabled on the device.
  */
 @TeleOp(name = "HuskyLens Piece Test", group = "Test")
 public class HuskyLensPieceTestOpMode extends OpMode {
@@ -44,7 +45,7 @@ public class HuskyLensPieceTestOpMode extends OpMode {
             HuskyLens huskyLens = hardwareMap.get(HuskyLens.class, "huskylens");
             source = new HuskyLensPieceObservationSource(huskyLens);
             boolean alive = source.knock();
-            boolean selected = source.selectObjectRecognition();
+            boolean selected = source.selectColorRecognition();
             cameraReady = alive && selected;
             if (!cameraReady) {
                 failure = alive ? "algorithm not selected" : "knock failed";
@@ -54,6 +55,8 @@ public class HuskyLensPieceTestOpMode extends OpMode {
             failure = e.getClass().getSimpleName() + ": " + e.getMessage();
         }
         telemetry.addData("Camera", cameraReady ? "ready" : "not ready");
+        telemetry.addLine("Color Recognition: teach yellow/red/blue; enable Learn Multiple.");
+        telemetry.addLine("Firmware 0.5.1+ required for multiple blocks of the same color.");
         telemetry.addLine("No drivetrain commands in this OpMode.");
     }
 

@@ -35,11 +35,15 @@ import java.util.List;
  * is only admission. Tip value is decided later, on complete routes.
  *
  * <p>A committed plan is kept until its route is impossible or a new route
- * beats its stored utility by {@link PickupPlannerConstants#REPLAN_IMPROVEMENT_THRESHOLD}.
+ * beats its current utility by {@link PickupPlannerConstants#REPLAN_IMPROVEMENT_THRESHOLD}.
+ * The committed target order is re-scored with fresh observations and the
+ * current robot pose on every call; its old coordinates and costs are never reused.
  * Impossible means a listed piece is gone, stale, or illegal, the same piece
  * is listed twice, or the route no longer fits in the robot. After a successful
  * intake the caller adds the piece to {@link BallLoad}, removes it from the
  * visible list, and calls {@link #plan} again.
+ * Pass null for the commitment after completion, cancellation, failure, or
+ * a localization reset. Inventory changes also invalidate the old commitment.
  *
  * <p>A later path follower should drive {@link PickupPlan#getTargets()} in
  * order, then go from {@link PickupPlan#getEndpointX()} to a scoring pose.
@@ -70,17 +74,22 @@ public final class PickupPlanner {
             double nowSec,
             PickupPlan committed) {
         BallLoad held = onboard == null ? BallLoad.empty() : onboard;
-        if (robot == null || !robot.isPoseValid()) {
+        if (robot == null || !robot.isPoseValid() || !Double.isFinite(nowSec)
+                || held.total() > PickupPlannerConstants.MAX_CAPACITY) {
             return PickupPlan.invalid(held);
         }
 
-        List<TrackedPiece> candidates = selectCandidates(robot, visible, nowSec);
+        List<TrackedPiece> candidates = selectCandidates(visible, nowSec);
         int remaining = held.remainingCapacity(PickupPlannerConstants.MAX_CAPACITY);
-        PickupPlan best = search(robot, held, candidates, remaining);
-        return applyHysteresis(best, committed, candidates, remaining);
+        List<TrackedPiece> pool = candidates.size() > PickupPlannerConstants.MAX_CANDIDATES
+                ? capPool(candidates, robot.getFieldX(), robot.getFieldY()) : candidates;
+        PickupPlan best = search(robot, held, pool, remaining);
+        // Validate the incumbent against every fresh piece, not just the
+        // admission pool. Pool pruning is not evidence that a target vanished.
+        return applyHysteresis(best, committed, robot, held, candidates, remaining);
     }
 
-    private List<TrackedPiece> selectCandidates(RobotState robot, List<TrackedPiece> visible, double nowSec) {
+    private List<TrackedPiece> selectCandidates(List<TrackedPiece> visible, double nowSec) {
         List<TrackedPiece> fresh = new ArrayList<TrackedPiece>();
         if (visible == null) {
             return fresh;
@@ -97,10 +106,7 @@ public final class PickupPlanner {
                 fresh.set(existing, piece);
             }
         }
-        if (fresh.size() <= PickupPlannerConstants.MAX_CANDIDATES) {
-            return fresh;
-        }
-        return capPool(fresh, robot.getFieldX(), robot.getFieldY());
+        return fresh;
     }
 
     /**
@@ -203,7 +209,8 @@ public final class PickupPlanner {
             return false;
         }
         double age = nowSec - piece.getLastSeenTimestampSec();
-        return Double.isFinite(age) && age <= PickupPlannerConstants.MAX_OBSERVATION_AGE_SEC;
+        return Double.isFinite(age) && age >= 0.0
+                && age <= PickupPlannerConstants.MAX_OBSERVATION_AGE_SEC;
     }
 
     private PickupPlan search(
@@ -368,51 +375,68 @@ public final class PickupPlanner {
         return Integer.compare(left.size(), right.size());
     }
 
-    private static PickupPlan applyHysteresis(
+    private PickupPlan applyHysteresis(
             PickupPlan best,
             PickupPlan committed,
+            RobotState robot,
+            BallLoad held,
             List<TrackedPiece> candidates,
             int remaining) {
-        if (!routeStillOpen(committed, candidates, remaining)) {
+        int[] order = committedOrder(committed, held, candidates, remaining);
+        if (order == null) {
             return best;
         }
-        double required = committed.getUtility() * (1.0 + PickupPlannerConstants.REPLAN_IMPROVEMENT_THRESHOLD);
+        PickupPlan refreshed = score(robot, held, candidates, order, order.length);
+        double required = refreshed.getUtility() * (1.0 + PickupPlannerConstants.REPLAN_IMPROVEMENT_THRESHOLD);
         if (best.getUtility() > required + TIE_EPSILON) {
             return best;
         }
-        return committed;
+        return refreshed;
     }
 
-    private static boolean routeStillOpen(PickupPlan committed, List<TrackedPiece> candidates, int remaining) {
-        if (committed == null || !committed.isValid()) {
-            return false;
+    /** Reconstruct the old order and check the inventory it was planned from. */
+    private static int[] committedOrder(
+            PickupPlan committed, BallLoad held, List<TrackedPiece> candidates, int remaining) {
+        if (committed == null || !committed.isValid() || committed.getResultingLoad() == null) {
+            return null;
         }
         List<PickupTarget> targets = committed.getTargets();
         if (committed.getDecision() == PickupPlan.Decision.SHOOT_NOW) {
-            return targets.isEmpty();
-        }
-        if (committed.getDecision() != PickupPlan.Decision.PICKUP || targets.isEmpty()) {
-            return false;
+            if (!targets.isEmpty()) {
+                return null;
+            }
+        } else if (committed.getDecision() != PickupPlan.Decision.PICKUP || targets.isEmpty()) {
+            return null;
         }
         if (targets.size() > remaining) {
-            return false;
+            return null;
         }
+        int pollen = committed.getResultingLoad().getPollen();
+        int nectar = committed.getResultingLoad().getNectar();
+        int[] order = new int[targets.size()];
         for (int i = 0; i < targets.size(); i++) {
             PickupTarget target = targets.get(i);
             if (target == null || target.getPiece() == null) {
-                return false;
+                return null;
             }
             int id = target.getPiece().getId();
-            if (indexOfId(candidates, id) < 0) {
-                return false;
+            order[i] = indexOfId(candidates, id);
+            if (order[i] < 0
+                    || candidates.get(order[i]).getType() != target.getPiece().getType()) {
+                return null;
             }
             for (int j = 0; j < i; j++) {
                 if (targets.get(j).getPiece().getId() == id) {
-                    return false;
+                    return null;
                 }
             }
+            if (target.getPiece().getType() == BallType.NECTAR) {
+                nectar--;
+            } else {
+                pollen--;
+            }
         }
-        return true;
+        return pollen == held.getPollen() && nectar == held.getNectar() ? order : null;
     }
 
     private static int indexOfId(List<TrackedPiece> pieces, int id) {

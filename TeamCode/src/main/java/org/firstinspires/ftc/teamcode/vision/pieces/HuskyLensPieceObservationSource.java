@@ -15,9 +15,11 @@ import java.util.List;
  * {@code width}/{@code height}. The driver has no confidence field. A failed
  * read returns an empty list instead of throwing into the OpMode.
  *
- * <p>The algorithm is {@link HuskyLens.Algorithm#OBJECT_RECOGNITION} because
- * pollen and nectar are taught objects with separate ids. Object tracking
- * follows one target. Line tracking returns arrows, which this source ignores.
+ * <p>Use {@link HuskyLens.Algorithm#COLOR_RECOGNITION} with yellow, red,
+ * and blue taught as separate ids. The original HuskyLens object-recognition
+ * mode only recognizes predefined categories, not arbitrary game balls.
+ * Enable Learn Multiple on the device and use firmware 0.5.1 or later to
+ * detect multiple blocks of the same color. Verify thresholds under field lighting.
  */
 public final class HuskyLensPieceObservationSource implements PieceObservationSource {
 
@@ -28,15 +30,15 @@ public final class HuskyLensPieceObservationSource implements PieceObservationSo
     }
 
     /**
-     * Asks the device for object recognition. Returns false when the device
+     * Asks the device for color recognition. Returns false when the device
      * is missing or the call fails. The SDK does not set an algorithm itself.
      */
-    public boolean selectObjectRecognition() {
+    public boolean selectColorRecognition() {
         if (huskyLens == null) {
             return false;
         }
         try {
-            huskyLens.selectAlgorithm(HuskyLens.Algorithm.OBJECT_RECOGNITION);
+            huskyLens.selectAlgorithm(HuskyLens.Algorithm.COLOR_RECOGNITION);
             return true;
         } catch (RuntimeException ignored) {
             return false;

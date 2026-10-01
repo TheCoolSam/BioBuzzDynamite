@@ -41,6 +41,12 @@ public final class PickupPlannerScenarios {
         testIllegalAndStalePieces();
         testConfidenceCanRejectAShortRoute();
         testHysteresis();
+        testCommittedGeometryRefreshes();
+        testCommittedCostsRefresh();
+        testCompletedShotInvalidatesCommitment();
+        testInventoryChangeInvalidatesCommitment();
+        testFutureObservationsAndInvalidClock();
+        testCommitmentOutsideAdmissionPool();
         testTargetDisappears();
         testInvalidPoseDoesNotUseOrigin();
         testCollectThenReplan();
@@ -284,25 +290,110 @@ public final class PickupPlannerScenarios {
         check(allType(reliableNear, BallType.POLLEN), "H near route wins once its confidence is real");
     }
 
-    /** 3 percent is not enough to abandon the committed route. 25 percent is. */
+    /** A slightly shorter alternative should not cause chatter; a much shorter one should. */
     private static void testHysteresis() {
-        MapTipModel tips = new MapTipModel().set(0, 2, 0.80);
+        MapTipModel tips = new MapTipModel().set(1, 0, 0.80);
         PickupPlanner planner = planner(tips);
-        List<TrackedPiece> pieces = Arrays.asList(
-                ball(1, BallType.NECTAR, 30.0, 0.0),
-                ball(2, BallType.NECTAR, 48.0, 0.0));
-        PickupPlan fresh = planner.plan(pose(0.0, 0.0), BallLoad.empty(), pieces, 0.0, null);
+        TrackedPiece first = ball(1, BallType.POLLEN, 30.0, 0.0);
+        TrackedPiece slightlyCloser = ball(2, BallType.POLLEN, 28.0, 0.0);
+        PickupPlan fresh = planner.plan(pose(0.0, 0.0), BallLoad.empty(), Arrays.asList(first), 0.0, null);
         check(fresh.getUtility() > 0.0, "I has a positive utility");
+        List<TrackedPiece> closeChoices = Arrays.asList(first, slightlyCloser);
+        PickupPlan unconstrained = planner.plan(pose(0.0, 0.0), BallLoad.empty(), closeChoices, 0.0, null);
+        check(containsId(unconstrained, 2), "I alternate is better without a commitment");
+        check(unconstrained.getUtility() < fresh.getUtility() * 1.15, "I improvement is below threshold");
+        PickupPlan kept = planner.plan(pose(0.0, 0.0), BallLoad.empty(), closeChoices, 0.0, fresh);
+        check(containsId(kept, 1), "I keeps the target for a small improvement");
 
-        PickupPlan threePercent = fresh.withUtility(fresh.getUtility() / 1.03);
-        PickupPlan kept = planner.plan(pose(0.0, 0.0), BallLoad.empty(), pieces, 0.0, threePercent);
-        check(kept == threePercent, "I keeps the plan when the new one is only 3 percent better");
+        TrackedPiece muchCloser = ball(2, BallType.POLLEN, 10.0, 0.0);
+        List<TrackedPiece> betterChoices = Arrays.asList(first, muchCloser);
+        PickupPlan switched = planner.plan(pose(0.0, 0.0), BallLoad.empty(), betterChoices, 0.0, fresh);
+        check(containsId(switched, 2), "I switches for a large improvement");
+        check(switched.getUtility() > fresh.getUtility() * 1.15, "I switch beats threshold");
+        PickupPlan alteredUtility = planner.plan(pose(0.0, 0.0), BallLoad.empty(),
+                betterChoices, 0.0, fresh.withUtility(1.0e6));
+        check(containsId(alteredUtility, 2), "I a stale stored utility cannot prevent a switch");
+    }
 
-        PickupPlan twentyFive = fresh.withUtility(fresh.getUtility() / 1.25);
-        PickupPlan switched = planner.plan(pose(0.0, 0.0), BallLoad.empty(), pieces, 0.0, twentyFive);
-        check(switched != twentyFive, "I switches when the new plan is 25 percent better");
-        near(switched.getUtility(), fresh.getUtility(), 1e-9, "I switch adopts the new utility");
-        check(Arrays.equals(ids(switched), ids(fresh)), "I switch adopts the new route");
+    private static void testCommittedGeometryRefreshes() {
+        PickupPlanner planner = planner(new MapTipModel().set(1, 0, 0.8));
+        PickupPlan original = planner.plan(pose(0, 0), BallLoad.empty(),
+                Arrays.asList(ball(1, BallType.POLLEN, 20, 0)), 0, null);
+        TrackedPiece moved = new TrackedPiece(1, BallType.POLLEN, PieceOwnership.NEUTRAL,
+                25, 0, 0.7, 0.1, true);
+        PickupPlan refreshed = planner.plan(pose(0, 0), BallLoad.empty(), Arrays.asList(moved), 0.1, original);
+        near(refreshed.getTargets().get(0).getPiece().getFieldX(), 25, 1e-9, "moving target uses latest point");
+        near(refreshed.getEndpointX(), 31, 1e-9, "capture endpoint follows moving target");
+        check(refreshed.getEstimatedSeconds() > original.getEstimatedSeconds(), "moving target updates remaining time");
+        check(refreshed.getPlanConfidence() < original.getPlanConfidence(), "fresh confidence updates utility");
+        near(original.getEndpointX(), 26, 1e-9, "refresh preserves original immutable plan");
+
+        PickupPlan advanced = planner.plan(pose(10, 0), BallLoad.empty(), Arrays.asList(moved), 0.1, refreshed);
+        PickupPlan baseline = planner.plan(pose(10, 0), BallLoad.empty(), Arrays.asList(moved), 0.1, null);
+        near(advanced.getEstimatedSeconds(), baseline.getEstimatedSeconds(), 1e-9, "progress uses current robot pose");
+    }
+
+    private static void testCommittedCostsRefresh() {
+        PickupPlanner planner = planner(new MapTipModel().set(1, 0, 0.8));
+        PickupPlan original = planner.plan(pose(0, 0), BallLoad.empty(),
+                Arrays.asList(ball(1, BallType.POLLEN, 10, 0)), 0, null);
+        PickupPlan next = planner.plan(pose(0, 0), BallLoad.empty(), Arrays.asList(
+                ball(1, BallType.POLLEN, 100, 0), ball(2, BallType.POLLEN, 30, 0)), 0, original);
+        check(containsId(next, 2), "a worsened incumbent is compared at its current cost");
+    }
+
+    private static void testCompletedShotInvalidatesCommitment() {
+        PickupPlanner planner = planner(new MapTipModel().set(1, 0, 0.8));
+        PickupPlan shoot = planner.plan(pose(0, 0), new BallLoad(1, 0),
+                new ArrayList<TrackedPiece>(), 0, null);
+        check(shoot.getDecision() == PickupPlan.Decision.SHOOT_NOW, "loaded robot shoots");
+        PickupPlan next = planner.plan(pose(0, 0), BallLoad.empty(),
+                Arrays.asList(ball(1, BallType.POLLEN, 20, 0)), 0, shoot);
+        check(next.getDecision() == PickupPlan.Decision.PICKUP, "unloading invalidates completed shoot commitment");
+        check(next.getResultingLoad().getPollen() == 1, "next load comes from new collection");
+        PickupPlan relocated = planner.plan(pose(40, 0), new BallLoad(1, 0),
+                new ArrayList<TrackedPiece>(), 0, shoot);
+        near(relocated.getEndpointX(), 40, 1e-9, "shoot setup also refreshes its current pose");
+    }
+
+    private static void testInventoryChangeInvalidatesCommitment() {
+        PickupPlanner planner = planner(new MapTipModel().set(1, 0, 0.8).set(0, 1, 0.8));
+        PickupPlan committed = planner.plan(pose(0, 0), new BallLoad(1, 0),
+                new ArrayList<TrackedPiece>(), 0, null);
+        PickupPlan changed = planner.plan(pose(0, 0), new BallLoad(0, 1),
+                new ArrayList<TrackedPiece>(), 0, committed);
+        check(changed.getResultingLoad().getPollen() == 0, "inventory composition change drops old pollen");
+        check(changed.getResultingLoad().getNectar() == 1, "inventory composition change uses actual nectar");
+        check(planner.plan(pose(0, 0), new BallLoad(5, 0), new ArrayList<TrackedPiece>(), 0, null)
+                .getDecision() == PickupPlan.Decision.INVALID, "over-capacity load does not plan more actions");
+    }
+
+    private static void testFutureObservationsAndInvalidClock() {
+        PickupPlanner planner = planner(new MapTipModel().set(1, 0, 0.8));
+        TrackedPiece future = new TrackedPiece(1, BallType.POLLEN, PieceOwnership.NEUTRAL,
+                20, 0, 1, 100, true);
+        PickupPlan plan = planner.plan(pose(0, 0), BallLoad.empty(), Arrays.asList(future), 0, null);
+        check(plan.getTargets().isEmpty(), "future observation is rejected");
+        check(planner.plan(pose(0, 0), new BallLoad(1, 0), Arrays.asList(future), Double.NaN, null)
+                .getDecision() == PickupPlan.Decision.INVALID, "invalid clock cannot produce a shoot command");
+        check(planner.plan(pose(0, 0), BallLoad.empty(), Arrays.asList(future), Double.POSITIVE_INFINITY, null)
+                .getDecision() == PickupPlan.Decision.INVALID, "infinite clock is rejected");
+        PickupPlan current = planner.plan(pose(0, 0), BallLoad.empty(),
+                Arrays.asList(ball(2, BallType.POLLEN, 20, 0)), 0, null);
+        check(current.getDecision() == PickupPlan.Decision.PICKUP, "observation at current time remains usable");
+    }
+
+    private static void testCommitmentOutsideAdmissionPool() {
+        PickupPlanner planner = planner(new MapTipModel().set(1, 0, 0.8));
+        TrackedPiece incumbent = ball(100, BallType.POLLEN, 30, 0);
+        PickupPlan original = planner.plan(pose(0, 0), BallLoad.empty(), Arrays.asList(incumbent), 0, null);
+        List<TrackedPiece> crowded = new ArrayList<TrackedPiece>();
+        for (int i = 0; i < PickupPlannerConstants.MAX_CANDIDATES; i++) {
+            crowded.add(ball(i + 1, BallType.POLLEN, 28, 0));
+        }
+        crowded.add(incumbent);
+        PickupPlan next = planner.plan(pose(0, 0), BallLoad.empty(), crowded, 0, original);
+        check(containsId(next, 100), "pool pruning does not invalidate a fresh committed target");
     }
 
     /** A missing first target replans even if the old utility looks enormous. */

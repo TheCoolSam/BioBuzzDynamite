@@ -31,6 +31,8 @@ import java.util.List;
  *   <li>Left stick: field velocity. Stick up is +Y.</li>
  *   <li>Right stick X: yaw. Stick right is counterclockwise.</li>
  *   <li>A: pretend the first target was collected, then replan.</li>
+ *   <li>B: pretend a shooting plan completed and emptied the robot.</li>
+ *   <li>X: cancel the current plan without changing inventory.</li>
  *   <li>Dpad down: toggle an invalid pose.</li>
  *   <li>Start: reset pose, load, and pieces.</li>
  * </ul>
@@ -75,6 +77,8 @@ public class PickupPlannerTestOpMode extends OpMode {
     private double timestampSec;
     private boolean poseInvalid;
     private boolean aWasDown;
+    private boolean bWasDown;
+    private boolean xWasDown;
     private boolean dpadDownWasDown;
     private boolean startWasDown;
 
@@ -133,6 +137,18 @@ public class PickupPlannerTestOpMode extends OpMode {
         }
         aWasDown = gamepad1.a;
 
+        if (pressed(gamepad1.b, bWasDown) && committed != null
+                && committed.getDecision() == PickupPlan.Decision.SHOOT_NOW) {
+            load = BallLoad.empty();
+            committed = null;
+        }
+        bWasDown = gamepad1.b;
+        // The same clearing step is required after a failed action or a pose reset.
+        if (pressed(gamepad1.x, xWasDown)) {
+            committed = null;
+        }
+        xWasDown = gamepad1.x;
+
         // These pieces are scripted, so each loop counts as a fresh sighting.
         markSeen(timestampSec);
         committed = planner.plan(robot, load, pieces, timestampSec, committed);
@@ -141,6 +157,7 @@ public class PickupPlannerTestOpMode extends OpMode {
 
     @Override
     public void stop() {
+        committed = null;
     }
 
     private void resetField() {
@@ -169,7 +186,7 @@ public class PickupPlannerTestOpMode extends OpMode {
         telemetry.addData("Tip p", "%.2f", committed.getTipProbability());
         telemetry.addData("Seconds", "%.2f", committed.getEstimatedSeconds());
         telemetry.addData("Route", routeText(committed));
-        telemetry.addLine("LS move | RS yaw | A collect | DD invalid pose | Start reset");
+        telemetry.addLine("LS move | RS yaw | A collect | B shot complete | X cancel | DD invalid pose | Start reset");
     }
 
     private static String routeText(PickupPlan plan) {
