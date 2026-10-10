@@ -30,4 +30,9 @@ public interface RobotStateSource {
     boolean isPoseValid();
 
     boolean isVelocityValid();
+
+    /** Hardware sources must provide actual acquisition metadata. Missing health fails closed. */
+    default double getAcquisitionTimestampSec() { return Double.NaN; }
+    default boolean isDeviceHealthy() { return false; }
+    default long getResetGeneration() { return 0; }
 }

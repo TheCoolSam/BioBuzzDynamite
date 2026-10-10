@@ -24,6 +24,11 @@ out/
 .gradle/
 build/
 
+# Python test/tool bytecode
+__pycache__/
+*.pyc
+*.pyo
+
 # Local configuration file (sdk path, etc)
 local.properties
 

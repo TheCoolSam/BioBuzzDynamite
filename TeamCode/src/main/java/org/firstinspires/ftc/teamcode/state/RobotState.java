@@ -13,7 +13,8 @@ import java.util.Locale;
  * positive rotation counterclockwise.
  *
  * <p>Check {@link #isPoseValid()} and {@link #isVelocityValid()} before trusting
- * the numbers. A snapshot never contains NaN. Nothing in here can be changed
+ * the numbers. Physical pose/rate values are sanitized; unavailable acquisition
+ * provenance may be NaN and fails freshness checks. Nothing in here can be changed
  * after it is created, so one subsystem cannot overwrite a value another
  * subsystem is still reading.
  */
@@ -31,6 +32,9 @@ public final class RobotState {
     private final double angularAccelerationRadPerSec2;
     private final boolean poseValid;
     private final boolean velocityValid;
+    private final double acquisitionTimestampSec;
+    private final boolean deviceHealthy;
+    private final long resetGeneration;
 
     public RobotState(
             double timestampSec,
@@ -45,7 +49,20 @@ public final class RobotState {
             double angularAccelerationRadPerSec2,
             boolean poseValid,
             boolean velocityValid) {
+        this(timestampSec, fieldX, fieldY, headingRad, fieldVx, fieldVy,
+                angularVelocityRadPerSec, fieldAx, fieldAy, angularAccelerationRadPerSec2,
+                poseValid, velocityValid, timestampSec, true, 0);
+    }
+
+    public RobotState(double timestampSec, double fieldX, double fieldY, double headingRad,
+            double fieldVx, double fieldVy, double angularVelocityRadPerSec,
+            double fieldAx, double fieldAy, double angularAccelerationRadPerSec2,
+            boolean poseValid, boolean velocityValid, double acquisitionTimestampSec,
+            boolean deviceHealthy, long resetGeneration) {
         this.timestampSec = finiteOrZero(timestampSec);
+        this.acquisitionTimestampSec = acquisitionTimestampSec;
+        this.deviceHealthy = deviceHealthy && finite(timestampSec) && finite(acquisitionTimestampSec);
+        this.resetGeneration = resetGeneration;
 
         if (finite(fieldX) && finite(fieldY) && finite(headingRad)) {
             this.fieldX = fieldX;
@@ -140,11 +157,23 @@ public final class RobotState {
     }
 
     public boolean isPoseValid() {
-        return poseValid;
+        return poseValid && deviceHealthy;
     }
 
     public boolean isVelocityValid() {
-        return velocityValid;
+        return velocityValid && deviceHealthy;
+    }
+
+    public double getAcquisitionTimestampSec() { return acquisitionTimestampSec; }
+    public boolean isDeviceHealthy() { return deviceHealthy; }
+    public long getResetGeneration() { return resetGeneration; }
+
+    public boolean isFresh(double nowSec, double maxAgeSec) {
+        double age = nowSec - acquisitionTimestampSec;
+        double snapshotAge = nowSec - timestampSec;
+        return isPoseValid() && finite(nowSec) && finite(maxAgeSec) && maxAgeSec >= 0
+                && age >= -1e-9 && age <= maxAgeSec + 1e-9
+                && snapshotAge >= -1e-9 && snapshotAge <= maxAgeSec + 1e-9;
     }
 
     @Override

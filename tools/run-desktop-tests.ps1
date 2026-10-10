@@ -33,15 +33,15 @@ if (-not $PedroCoreJar -or -not (Test-Path -LiteralPath $PedroCoreJar)) {
 }
 $classpath = $classes + [IO.Path]::PathSeparator + $PedroCoreJar
 $sources = @()
-foreach ($package in @('math', 'match', 'planning/pickup', 'state', 'turret', 'vision/pieces')) {
+foreach ($package in @('math', 'match', 'planning/pickup', 'state', 'turret', 'vision/pieces', 'scoring', 'robot')) {
     $sources += Get-ChildItem -LiteralPath (Join-Path $sourceRoot $package) -Filter '*.java' |
-        Where-Object Name -ne 'HuskyLensPieceObservationSource.java' |
+        Where-Object { $_.Name -notin @('HuskyLensPieceObservationSource.java', 'RevTurretIO.java', 'LimelightTargetSource.java', 'RevRobotIO.java', 'RobotHardwareConfig.java') } |
         ForEach-Object FullName
 }
 foreach ($name in @('PedroManualDrive', 'PedroMappedReading', 'PedroPoseAdapter')) {
     $sources += Join-Path $sourceRoot ('pedro/' + $name + '.java')
 }
-$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios')
+$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios')
 foreach ($scenario in $scenarios) {
     $sources += Join-Path $sourceRoot ('test/' + $scenario + '.java')
 }

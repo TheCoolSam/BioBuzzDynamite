@@ -78,6 +78,10 @@ public final class RobotStateHistory {
         if (state == null || !Double.isFinite(state.getTimestampSec())) {
             return;
         }
+        if(!samples.isEmpty()&&state.getResetGeneration()<samples.get(samples.size()-1).getResetGeneration())return;
+        if (!samples.isEmpty() && state.getResetGeneration() != samples.get(samples.size() - 1).getResetGeneration()) {
+            samples.clear();
+        }
         int index = 0;
         while (index < samples.size()
                 && samples.get(index).getTimestampSec() < state.getTimestampSec() - 1.0e-9) {
@@ -129,7 +133,8 @@ public final class RobotStateHistory {
         }
         RobotState left = samples.get(upper - 1);
         RobotState right = samples.get(upper);
-        if (!left.isPoseValid() || !right.isPoseValid()) {
+        if (!left.isPoseValid() || !right.isPoseValid()
+                || left.getResetGeneration() != right.getResetGeneration()) {
             return Optional.empty();
         }
         double span = right.getTimestampSec() - left.getTimestampSec();
@@ -169,7 +174,9 @@ public final class RobotStateHistory {
                 velocity ? lerp(left.getFieldAy(), right.getFieldAy(), alpha) : 0.0,
                 velocity ? lerp(left.getAngularAccelerationRadPerSec2(), right.getAngularAccelerationRadPerSec2(), alpha) : 0.0,
                 true,
-                velocity);
+                velocity,
+                Math.min(left.getAcquisitionTimestampSec(), right.getAcquisitionTimestampSec()),
+                left.isDeviceHealthy() && right.isDeviceHealthy(), left.getResetGeneration());
     }
 
     private static double lerp(double start, double end, double alpha) {

@@ -71,6 +71,9 @@ public final class PickupPlannerConstants {
      */
     public static final double MAX_OBSERVATION_AGE_SEC = 0.50;
 
+    /** Conservative software deadline; hardware acceptance must validate this budget. */
+    public static final double MAX_POSE_AGE_SEC = 0.50;
+
     /**
      * How hard detection confidence scales utility. 0 ignores confidence.
      * 1 would use the geometric mean directly. 0.40 keeps a poorly seen route

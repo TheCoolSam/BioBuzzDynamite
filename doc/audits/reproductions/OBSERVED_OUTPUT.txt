@@ -1,0 +1,14 @@
+Observed against commit 20e25b3 on October 1, 2026.
+These are diagnostic reproductions, not pass/fail regression suites.
+
+AuditProbe:
+Rear crossing: desired 160.0 -> -160.0 deg; power 0.35 -> -1.00; unwind 1.047 -> -1.047 rad/s
+Unwind after 200 simulated seconds: desired 140.000000 deg; active true; omega 0.000000000 rad/s; exit threshold 130.0 deg
+Empty inventory, no known tip rates: decision=SHOOT_NOW, utility=0.0
+Wall pickup: decision PICKUP; capture x 149.0 in (beyond nominal 144-in field)
+10-second-old robot snapshot: decision=PICKUP, valid=true
+Same observation timestamp processed five times: confidence 0.20 -> 1.00
+No detection after presumed collection: old track still published=true
+
+PedroAuditProbe:
+Drive command accepted=false; actual output after invalid heading=DrivePowers{forward=0.5, strafe=0.0, turn=0.0}

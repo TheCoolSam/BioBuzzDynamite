@@ -12,4 +12,6 @@ package org.firstinspires.ftc.teamcode.planning.pickup;
 public interface ShotSetupTimeModel {
 
     double estimateSeconds(double robotX, double robotY, double robotHeading, BallLoad load);
+    /** Scalar-only simulation models cannot provide an executable scoring pose. */
+    default ShotSetupPlan select(double robotX,double robotY,double robotHeading,BallLoad load) {return null;}
 }

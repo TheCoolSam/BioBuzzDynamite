@@ -243,7 +243,7 @@ public final class PickupPlannerScenarios {
         TrackedPiece stale = new TrackedPiece(
                 9, BallType.NECTAR, PieceOwnership.ALLIANCE, 12.0, 0.0, 1.0, 0.0, true);
         PickupPlan ignored = planner.plan(
-                pose(0.0, 0.0),
+                new RobotState(5, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, true),
                 BallLoad.empty(),
                 Arrays.asList(stale),
                 5.0,
@@ -762,19 +762,19 @@ public final class PickupPlannerScenarios {
 
     private static void testTravelTimeUsesTheLongerAxis() {
         EuclideanTravelTimeModel model = new EuclideanTravelTimeModel(40.0, Math.PI, 0.0);
-        double translation = model.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 80.0, 0.0, 0.0));
+        double translation = model.estimateSeconds(0.0, 0.0, 0.0, travelTarget(80.0, 0.0, 0.0));
         near(translation, 2.0, 1.0e-9, "P 80 inches at 40 in/s is 2.0 s before intake overhead");
 
-        double yaw = model.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 0.0, 0.0, Math.PI / 2.0));
+        double yaw = model.estimateSeconds(0.0, 0.0, 0.0, travelTarget(0.0, 0.0, Math.PI / 2.0));
         near(yaw, 0.5, 1.0e-9, "Q a quarter turn at pi rad/s is 0.5 s");
 
-        double together = model.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 80.0, 0.0, Math.PI / 2.0));
+        double together = model.estimateSeconds(0.0, 0.0, 0.0, travelTarget(80.0, 0.0, Math.PI / 2.0));
         near(together, 2.0, 1.0e-9, "R simultaneous yaw does not add onto the translation");
         check(Math.abs(together - 2.5) > 0.1, "R the estimate is not translation plus yaw");
 
         EuclideanTravelTimeModel withIntake = new EuclideanTravelTimeModel(
                 40.0, Math.PI, PickupPlannerConstants.ACQUISITION_OVERHEAD_SEC);
-        near(withIntake.estimateSeconds(0.0, 0.0, 0.0, new PickupTarget(null, 80.0, 0.0, Math.PI / 2.0)),
+        near(withIntake.estimateSeconds(0.0, 0.0, 0.0, travelTarget(80.0, 0.0, Math.PI / 2.0)),
                 2.0 + PickupPlannerConstants.ACQUISITION_OVERHEAD_SEC,
                 1.0e-9,
                 "R intake overhead is added after the longer movement");
@@ -785,6 +785,9 @@ public final class PickupPlannerScenarios {
         if (!(Math.abs(actual - expected) <= tolerance)) {
             throw new AssertionError(label + " expected " + expected + " but was " + actual);
         }
+    }
+    private static PickupTarget travelTarget(double x,double y,double heading) {
+        return new PickupTarget(new TrackedPiece(1,BallType.POLLEN,PieceOwnership.NEUTRAL,x,y,1,0,true),x,y,heading);
     }
 
     private static void check(boolean condition, String label) {

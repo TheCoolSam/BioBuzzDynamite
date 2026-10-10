@@ -31,6 +31,20 @@ public final class PedroMappedReading implements RobotStateSource {
     private final double omegaRadPerSec;
     private final boolean poseValid;
     private final boolean velocityValid;
+    private double acquiredSec = Double.NaN;
+    private boolean healthy;
+    private long generation;
+
+    /** Explicit acquisition provenance; finite pose values alone are not device health. */
+    public static PedroMappedReading from(Pose pose, Velocity velocity, double acquiredSec,
+            boolean deviceHealthy, long generation) {
+        PedroMappedReading reading = from(pose, velocity);
+        reading.acquiredSec = acquiredSec; reading.healthy = deviceHealthy; reading.generation = generation;
+        return reading;
+    }
+    @Override public double getAcquisitionTimestampSec() { return acquiredSec; }
+    @Override public boolean isDeviceHealthy() { return healthy; }
+    @Override public long getResetGeneration() { return generation; }
 
     private PedroMappedReading(
             double x,

@@ -25,8 +25,9 @@ public class TurretState {
     public double targetX;
     public double targetY;
 
-    /** Seconds since the previous control cycle. Zero or negative is allowed. */
+    /** Seconds since the previous control cycle. Outside [0.0001, 0.2] stops tracking. */
     public double dt;
+    public long resetGeneration;
 
     /**
      * False when localization has no pose this loop. Defaults true so a state

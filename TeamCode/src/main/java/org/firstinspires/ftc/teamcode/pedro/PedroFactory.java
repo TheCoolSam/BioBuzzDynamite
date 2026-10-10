@@ -45,6 +45,9 @@ public final class PedroFactory {
     }
 
     public static Follower create(HardwareMap hardwareMap) {
+        if (!PedroConstants.HARDWARE_AND_TUNING_CONFIRMED) {
+            throw new IllegalStateException("Drive/odometry calibration and path tuning required");
+        }
         if (hardwareMap == null) {
             throw new IllegalArgumentException("hardwareMap is required");
         }

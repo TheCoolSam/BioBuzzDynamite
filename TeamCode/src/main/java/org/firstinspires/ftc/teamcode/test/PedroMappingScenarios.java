@@ -72,10 +72,10 @@ public final class PedroMappingScenarios {
         RobotStateEstimator estimator = new RobotStateEstimator();
         Velocity velocity = new Velocity(20.0, -10.0, 0.5);
         estimator.update(
-                PedroMappedReading.from(new Pose(1.0, 2.0, Math.PI - 0.02), velocity),
+                PedroMappedReading.from(new Pose(1.0, 2.0, Math.PI - 0.02), velocity, 1, true, 0),
                 1.0);
         RobotState wrapped = estimator.update(
-                PedroMappedReading.from(new Pose(1.0, 2.0, -Math.PI + 0.02), velocity),
+                PedroMappedReading.from(new Pose(1.0, 2.0, -Math.PI + 0.02), velocity, 1.02, true, 0),
                 1.02);
         near(wrapped.getAngularAccelerationRadPerSec2(), 0.0, "E heading wrap does not spike alpha");
         near(wrapped.getFieldAx(), 0.0, "E heading wrap does not spike Ax");
@@ -86,7 +86,7 @@ public final class PedroMappingScenarios {
     private static void testInvalidNeverBecomesOrigin() {
         PedroMappedReading nanPose = PedroMappedReading.from(
                 new Pose(Double.NaN, 5.0, 1.0),
-                new Velocity(20.0, -10.0, 0.5));
+                new Velocity(20.0, -10.0, 0.5), 2, true, 0);
         check(!nanPose.isPoseValid(), "F non-finite pose is invalid");
         near(nanPose.getX(), 0.0, "F invalid pose stores 0 instead of NaN");
         check(nanPose.isVelocityValid(), "F a good velocity stays usable");

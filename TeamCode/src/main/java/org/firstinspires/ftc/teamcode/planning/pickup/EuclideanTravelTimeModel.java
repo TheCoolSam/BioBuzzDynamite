@@ -28,9 +28,9 @@ public final class EuclideanTravelTimeModel implements TravelTimeModel {
             double speedInPerSec,
             double yawRateRadPerSec,
             double acquisitionOverheadSec) {
-        this.speedInPerSec = speedInPerSec > 1.0e-3 ? speedInPerSec : 1.0e-3;
-        this.yawRateRadPerSec = yawRateRadPerSec > 1.0e-3 ? yawRateRadPerSec : 1.0e-3;
-        this.acquisitionOverheadSec = acquisitionOverheadSec > 0.0 ? acquisitionOverheadSec : 0.0;
+        this.speedInPerSec = Double.isFinite(speedInPerSec)&&speedInPerSec>0 ? speedInPerSec : Double.NaN;
+        this.yawRateRadPerSec = Double.isFinite(yawRateRadPerSec)&&yawRateRadPerSec>0 ? yawRateRadPerSec : Double.NaN;
+        this.acquisitionOverheadSec = Double.isFinite(acquisitionOverheadSec)&&acquisitionOverheadSec>=0 ? acquisitionOverheadSec : Double.NaN;
     }
 
     @Override
@@ -39,19 +39,19 @@ public final class EuclideanTravelTimeModel implements TravelTimeModel {
             double startY,
             double startHeadingRad,
             PickupTarget target) {
-        if (target == null
+        if (target == null || target.getPiece()==null
                 || !Double.isFinite(startX)
                 || !Double.isFinite(startY)
                 || !Double.isFinite(startHeadingRad)
                 || !Double.isFinite(target.getCaptureX())
                 || !Double.isFinite(target.getCaptureY())
                 || !Double.isFinite(target.getApproachHeadingRad())) {
-            return 1.0e6;
+            return Double.NaN;
         }
 
-        double dx = target.getCaptureX() - startX;
-        double dy = target.getCaptureY() - startY;
-        double translation = Math.hypot(dx, dy) / speedInPerSec;
+        // Execute the staging segment before crossing the piece along the capture heading.
+        double translation = (Math.hypot(target.getApproachX()-startX,target.getApproachY()-startY)
+                +Math.hypot(target.getCaptureX()-target.getApproachX(),target.getCaptureY()-target.getApproachY())) / speedInPerSec;
         double yaw = Math.abs(AngleUtil.wrapRadians(
                 target.getApproachHeadingRad() - startHeadingRad)) / yawRateRadPerSec;
         return Math.max(translation, yaw) + acquisitionOverheadSec;

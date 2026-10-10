@@ -17,6 +17,27 @@ import org.firstinspires.ftc.teamcode.state.RobotStateSource;
 public final class PedroRobotStateSource implements RobotStateSource {
 
     private final Follower follower;
+    private PedroMappedReading reading = PedroMappedReading.from(null, null);
+    private double acquiredSec = Double.NaN;
+    private boolean healthy;
+    private long generation;
+
+    /** Call only after a successful localizer acquisition and verified device health. */
+    public void capture(double acquisitionSec, boolean deviceHealthy) {
+        healthy = deviceHealthy && Double.isFinite(acquisitionSec)
+                && (!Double.isFinite(acquiredSec) || acquisitionSec >= acquiredSec);
+        reading = PedroMappedReading.from(follower.pose(), follower.velocity(),acquisitionSec,healthy,generation);
+        if (healthy) acquiredSec = acquisitionSec;
+    }
+
+    public void invalidate() { healthy = false; }
+    public void localizationReset() {
+        generation++; acquiredSec = Double.NaN; healthy = false;
+        reading = PedroMappedReading.from(null, null);
+    }
+    @Override public double getAcquisitionTimestampSec() { return acquiredSec; }
+    @Override public boolean isDeviceHealthy() { return healthy; }
+    @Override public long getResetGeneration() { return generation; }
 
     public PedroRobotStateSource(Follower follower) {
         if (follower == null) {
@@ -66,6 +87,6 @@ public final class PedroRobotStateSource implements RobotStateSource {
     }
 
     private PedroMappedReading current() {
-        return PedroMappedReading.from(follower.pose(), follower.velocity());
+        return reading;
     }
 }

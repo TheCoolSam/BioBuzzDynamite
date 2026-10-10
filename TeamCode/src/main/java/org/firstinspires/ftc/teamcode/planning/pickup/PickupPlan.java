@@ -6,9 +6,9 @@ import java.util.List;
 
 /**
  * The route the planner wants, or an explicit decision to shoot without driving.
- * Targets are capture poses in field inches. A path follower consumes this
- * later. This object does not command motors.
- * SHOOT_NOW is strategic intent only. A future executor may fire a feeder only
+ * Targets are capture poses in field inches, with a selected shot setup when
+ * the injected model supplies one. This object does not command motors.
+ * SHOOT_NOW is strategic intent only. An executor may fire a feeder only
  * when SHOOT_NOW AND staged-piece-confirmed AND shooter-ready are all true.
  */
 public final class PickupPlan {
@@ -34,6 +34,7 @@ public final class PickupPlan {
     private final double endpointX;
     private final double endpointY;
     private final double endpointHeadingRad;
+    private ShotSetupPlan shotSetup;
 
     private PickupPlan(
             Decision decision,
@@ -102,7 +103,7 @@ public final class PickupPlan {
      */
     public PickupPlan withUtility(double newUtility) {
         double stored = Double.isFinite(newUtility) ? newUtility : 0.0;
-        return new PickupPlan(
+        PickupPlan copy = new PickupPlan(
                 decision,
                 targets,
                 resultingLoad,
@@ -113,7 +114,15 @@ public final class PickupPlan {
                 endpointX,
                 endpointY,
                 endpointHeadingRad);
+        copy.shotSetup=shotSetup;
+        return copy;
     }
+
+    /** Return a copy carrying the selected scoring pose; scalar-only fixtures leave it absent. */
+    public PickupPlan withShotSetup(ShotSetupPlan setup) {
+        PickupPlan copy=withUtility(utility);copy.shotSetup=setup;return copy;
+    }
+    public ShotSetupPlan getShotSetup() {return shotSetup;}
 
     public Decision getDecision() {
         return decision;

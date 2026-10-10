@@ -120,9 +120,9 @@ public final class PieceTrackerScenarios {
         for (int frame = 0; frame < 10; frame++) {
             double jitter = (frame % 2 == 0) ? 0.0 : 0.4;
             PieceTrackingResult result = place(tracker, 
-                    Arrays.asList(pixel(1, 30.0 + jitter, 0.0, frame)),
+                    Arrays.asList(pixel(1, 30.0 + jitter, 0.0, frame * 0.05)),
                     robot(0.0, 0.0, 0.0),
-                    frame);
+                    frame * 0.05);
             check(result.getPieces().size() == 1, "D one track across jitter");
             int current = result.getPieces().get(0).getId();
             if (id < 0) {
@@ -268,7 +268,7 @@ public final class PieceTrackerScenarios {
                 tips,
                 new EuclideanTravelTimeModel(),
                 new FixedShotSetupModel(1.0));
-        PickupPlan plan = planner.plan(robot(0.0, 0.0, 0.0), BallLoad.empty(), result.getPieces(), 1.0, null);
+        PickupPlan plan = planner.plan(at(robot(0.0, 0.0, 0.0),1.0), BallLoad.empty(), result.getPieces(), 1.0, null);
         check(plan.getDecision() == PickupPlan.Decision.PICKUP, "L planner accepts tracker pieces");
         check(plan.getTargets().size() == 1, "L planner keeps the one piece");
         check(plan.getTargets().get(0).getPiece().getId() == piece.getId(), "L planner uses the stable track id");

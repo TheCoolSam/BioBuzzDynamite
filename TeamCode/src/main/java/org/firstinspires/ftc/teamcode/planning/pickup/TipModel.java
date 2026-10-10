@@ -12,4 +12,7 @@ public interface TipModel {
      * result as zero.
      */
     double getTipProbability(BallLoad load);
+
+    /** Distinguishes unavailable measurements from a measured zero probability. */
+    default boolean hasEstimate(BallLoad load) { return Double.isFinite(getTipProbability(load)); }
 }

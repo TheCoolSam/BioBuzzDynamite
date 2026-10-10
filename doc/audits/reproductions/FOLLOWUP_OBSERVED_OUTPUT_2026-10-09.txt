@@ -1,0 +1,7 @@
+10-second-old pose: PICKUP
+NaN travel: PICKUP, seconds=1000000.8, utility=0.000020000
+NaN shot setup: SHOOT_NOW, seconds=1000000.0, utility=0.000020000
+Five copies of one timestamp: confidence 0.20 -> 1.00
+Out-of-order observation: lastSeen 0.20 -> 0.10
+After collection/no detections: internal track still published=true
+Default wall model: PICKUP, center=(143.0, 56.0); right clearance=1.0 in

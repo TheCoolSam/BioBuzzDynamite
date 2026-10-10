@@ -10,17 +10,27 @@ import java.util.Map;
 public final class MapTipModel implements TipModel {
 
     private final double defaultProbability;
+    private final boolean defaultKnown;
     private final Map<Long, Double> table = new HashMap<Long, Double>();
 
     public MapTipModel() {
-        this(0.0);
+        defaultProbability = 0.0;
+        defaultKnown = false;
     }
 
     public MapTipModel(double defaultProbability) {
+        requireProbability(defaultProbability);
         this.defaultProbability = clamp(defaultProbability);
+        defaultKnown = Double.isFinite(defaultProbability);
+    }
+
+    @Override public boolean hasEstimate(BallLoad load) {
+        return load != null && (defaultKnown || table.containsKey(key(load.getPollen(), load.getNectar())));
     }
 
     public MapTipModel set(int pollen, int nectar, double probability) {
+        requireProbability(probability);
+        if(pollen<0||nectar<0)throw new IllegalArgumentException("Nonnegative measured load required");
         table.put(key(pollen, nectar), Double.valueOf(clamp(probability)));
         return this;
     }
@@ -46,5 +56,8 @@ public final class MapTipModel implements TipModel {
             return 1.0;
         }
         return probability;
+    }
+    private static void requireProbability(double probability) {
+        if(!Double.isFinite(probability)||probability<0||probability>1)throw new IllegalArgumentException("Measured probability must be in [0,1]");
     }
 }

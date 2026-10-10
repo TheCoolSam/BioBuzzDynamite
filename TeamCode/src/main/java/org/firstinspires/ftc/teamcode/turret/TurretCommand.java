@@ -1,8 +1,8 @@
 package org.firstinspires.ftc.teamcode.turret;
 
 /**
- * What the turret wants this cycle. The drive code is not in this task:
- * {@link #requestedChassisOmega} is only a request for a future mecanum controller.
+ * What the turret wants this cycle. {@link #requestedChassisOmega} is a rate
+ * request; DriveAssist converts it through measured yaw authority and driver arbitration.
  * Angles are radians. Motor power is in [-1, 1].
  */
 public class TurretCommand {

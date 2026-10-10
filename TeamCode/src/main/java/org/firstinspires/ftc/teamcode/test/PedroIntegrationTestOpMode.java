@@ -74,6 +74,8 @@ public class PedroIntegrationTestOpMode extends OpMode {
         boolean commanded = PedroManualDrive.request(follower, fieldX, fieldY, chassisOmega);
 
         follower.update();
+        // This diagnostic still requires a real device health check before automation.
+        source.capture(timer.seconds(), false);
         Pose pedroPose = follower.pose();
         Velocity pedroVelocity = follower.velocity();
         RobotState state = estimator.update(source, timer.seconds());

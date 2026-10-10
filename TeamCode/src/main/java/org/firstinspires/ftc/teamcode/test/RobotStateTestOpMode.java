@@ -105,6 +105,7 @@ public class RobotStateTestOpMode extends OpMode {
             source.integrate(dt);
         }
 
+        source.acquiredSec=timestampSec;
         RobotState robot = estimator.update(source, timestampSec);
         TurretState turretState = TurretStateAdapter.toTurretState(
                 robot,
@@ -232,6 +233,9 @@ public class RobotStateTestOpMode extends OpMode {
      * the OpMode does, the same way a real pose source would.
      */
     private static final class SimulatedSource implements RobotStateSource {
+        private double acquiredSec;
+        @Override public double getAcquisitionTimestampSec() {return acquiredSec;}
+        @Override public boolean isDeviceHealthy() {return true;}
         private double x = 0.0;
         private double y = 0.0;
         private double heading = 0.0;

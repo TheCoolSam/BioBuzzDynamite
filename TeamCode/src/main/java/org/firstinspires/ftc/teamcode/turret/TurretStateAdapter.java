@@ -26,6 +26,14 @@ public final class TurretStateAdapter {
             double targetXInches,
             double targetYInches,
             double dtSec) {
+        return toTurretState(robot, turretAngleRad, turretVelocityRadPerSec, targetXInches,
+                targetYInches, dtSec, robot == null ? Double.NaN : robot.getTimestampSec());
+    }
+
+    /** Automation must use its current monotonic time, not the snapshot timestamp. */
+    public static TurretState toTurretState(RobotState robot, double turretAngleRad,
+            double turretVelocityRadPerSec, double targetXInches, double targetYInches,
+            double dtSec, double nowSec) {
         TurretState turretState = new TurretState();
         if (robot == null) {
             turretState.poseValid = false;
@@ -37,7 +45,8 @@ public final class TurretStateAdapter {
             turretState.robotVx = robot.getFieldVx();
             turretState.robotVy = robot.getFieldVy();
             turretState.robotAngularVelocity = robot.getAngularVelocityRadPerSec();
-            turretState.poseValid = robot.isPoseValid();
+            turretState.poseValid = robot.isFresh(nowSec, 0.5);
+            turretState.resetGeneration = robot.getResetGeneration();
             turretState.velocityValid = robot.isVelocityValid();
         }
         // Preserve invalid measurements so the controller's input check can

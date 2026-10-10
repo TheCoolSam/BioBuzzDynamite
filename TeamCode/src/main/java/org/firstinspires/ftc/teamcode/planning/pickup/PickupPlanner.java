@@ -88,7 +88,7 @@ public final class PickupPlanner {
             double nowSec,
             PickupPlan committed) {
         BallLoad held = onboard == null ? BallLoad.empty() : onboard;
-        if (robot == null || !robot.isPoseValid() || !Double.isFinite(nowSec)
+        if (robot == null || !robot.isFresh(nowSec, PickupPlannerConstants.MAX_POSE_AGE_SEC)
                 || held.total() > PickupPlannerConstants.MAX_CAPACITY) {
             return PickupPlan.invalid(held);
         }
@@ -233,6 +233,7 @@ public final class PickupPlanner {
             List<TrackedPiece> candidates,
             int remaining) {
         PickupPlan best = score(robot, held, candidates, new int[0]);
+        if (best == null) best = waitPlan(robot, held);
         if (remaining == 0 || candidates.isEmpty()) {
             return best;
         }
@@ -303,7 +304,9 @@ public final class PickupPlanner {
                     PickupPlannerConstants.CAPTURE_LEAD_INCHES,
                     feasibility);
             if (target == null) return null; // Hard rejection, never a large cost penalty.
-            time += travelSeconds(x, y, heading, target);
+            double leg = travelSeconds(x, y, heading, target);
+            if (!Double.isFinite(leg) || leg < 0) return null;
+            time += leg;
             targets.add(target);
             load = load.plus(piece.getType());
             confidenceProduct *= clamp01(piece.getConfidence());
@@ -319,47 +322,45 @@ public final class PickupPlanner {
         // x, y, heading are the robot now when nothing was picked up, otherwise
         // the last capture pose. Shot time is measured from that endpoint.
         double total = time + shotSeconds(x, y, heading, load);
+        if (!Double.isFinite(total) || total < 0) return null;
         double cycle = Math.max(PickupPlannerConstants.MINIMUM_CYCLE_SEC, total);
         double tip = tipProbability(load);
         double utility = (PickupPlannerConstants.TIP_POINTS * tip * planConfidence) / cycle;
         if (load.total() == 0 || tip <= 0.0 || !Double.isFinite(utility) || utility <= 0.0) {
             if (length != 0) return null; // A longer route may still create a useful load.
-            return PickupPlan.of(PickupPlan.Decision.WAIT, Collections.<PickupTarget>emptyList(), held,
-                    0, 0, 1, 0, robot.getFieldX(), robot.getFieldY(), robot.getHeadingRad());
+            return waitPlan(robot, held);
         }
         PickupPlan.Decision decision = length == 0
                 ? PickupPlan.Decision.SHOOT_NOW
                 : PickupPlan.Decision.PICKUP;
-        return PickupPlan.of(decision, targets, load, tip, total, planConfidence, utility, x, y, heading);
+        return PickupPlan.of(decision, targets, load, tip, total, planConfidence, utility, x, y, heading)
+                .withShotSetup(shotSetup.select(x,y,heading,load));
     }
 
     private double shotSeconds(double x, double y, double heading, BallLoad load) {
         if (shotSetup == null) {
-            return PickupPlannerConstants.SHOT_EXECUTION_SEC;
+            return Double.NaN;
         }
         double seconds = shotSetup.estimateSeconds(x, y, heading, load);
         if (!Double.isFinite(seconds) || seconds < 0.0) {
-            return 1.0e6;
+            return Double.NaN;
         }
         return seconds;
     }
 
     private double travelSeconds(double x, double y, double heading, PickupTarget target) {
         if (travel == null) {
-            return 1.0e6;
+            return Double.NaN;
         }
         double seconds = travel.estimateSeconds(x, y, heading, target);
         if (!Double.isFinite(seconds) || seconds < 0.0) {
-            return 1.0e6;
+            return Double.NaN;
         }
         return seconds;
     }
 
     private double tipProbability(BallLoad load) {
-        // TODO: TipModel's scalar API (including MapTipModel's zero default)
-        // cannot distinguish unavailable model data from explicitly measured zero.
-        // Both cause WAIT unless some route has a positive evaluated load.
-        if (tipModel == null) {
+        if (tipModel == null || !tipModel.hasEstimate(load)) {
             return 0.0;
         }
         double probability = tipModel.getTipProbability(load);
@@ -370,6 +371,11 @@ public final class PickupPlanner {
             return 1.0;
         }
         return probability;
+    }
+
+    private static PickupPlan waitPlan(RobotState robot, BallLoad held) {
+        return PickupPlan.of(PickupPlan.Decision.WAIT, Collections.<PickupTarget>emptyList(), held,
+                0, 0, 1, 0, robot.getFieldX(), robot.getFieldY(), robot.getHeadingRad());
     }
 
     private static boolean better(PickupPlan candidate, PickupPlan incumbent) {

@@ -53,6 +53,18 @@ public final class PieceTrackerConstants {
      * policy for that known case. Unknown nectar does not use it.
      */
     public final boolean collectNeutralPollen;
+    private double evidenceIntervalSec=.05;
+    private boolean timingMeasured;
+    public double evidenceIntervalSec() {return evidenceIntervalSec;}
+    public boolean isTimingMeasured() {return timingMeasured;}
+    /** Explicitly record measured read-to-exposure delay and independent evidence cadence. */
+    public PieceTrackerConstants withMeasuredTiming(double latencySec,double evidenceIntervalSec) {
+        if(!Double.isFinite(latencySec)||latencySec<0||!Double.isFinite(evidenceIntervalSec)||evidenceIntervalSec<=0)
+            throw new IllegalArgumentException("Measured camera timing required");
+        PieceTrackerConstants copy=new PieceTrackerConstants(pollenCameraId,redNectarCameraId,blueNectarCameraId,
+                alliance,latencySec,associationGateInches,trackTimeoutSec,positionBlend,matureHitCount,anchor,collectNeutralPollen);
+        copy.evidenceIntervalSec=evidenceIntervalSec;copy.timingMeasured=true;return copy;
+    }
 
     public PieceTrackerConstants(
             int pollenCameraId,

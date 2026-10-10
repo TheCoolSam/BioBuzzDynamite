@@ -42,4 +42,8 @@ public final class PickupTarget {
     public double getApproachHeadingRad() {
         return approachHeadingRad;
     }
+
+    /** Begin the final straight intake pass here, facing approachHeadingRad. */
+    public double getApproachX() { return 2 * piece.getFieldX() - captureX; }
+    public double getApproachY() { return 2 * piece.getFieldY() - captureY; }
 }

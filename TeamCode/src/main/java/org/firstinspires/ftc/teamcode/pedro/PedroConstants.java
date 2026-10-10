@@ -13,6 +13,8 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
  * coefficients into this file and call the robot tuned.
  */
 public final class PedroConstants {
+    /** Set only after motor signs, odometry geometry/scales and path tune are measured. */
+    public static final boolean HARDWARE_AND_TUNING_CONFIRMED = false;
 
     /**
      * Which localizer {@link PedroFactory} builds. This is not a decision

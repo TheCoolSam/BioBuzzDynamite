@@ -29,9 +29,11 @@ public final class RobotStateEstimator {
     private double baselineVx = 0.0;
     private double baselineVy = 0.0;
     private double baselineOmega = 0.0;
+    private long generation = Long.MIN_VALUE;
 
     public void reset() {
         hasBaseline = false;
+        generation = Long.MIN_VALUE;
         baselineTimeSec = 0.0;
         baselineVx = 0.0;
         baselineVy = 0.0;
@@ -56,8 +58,14 @@ public final class RobotStateEstimator {
         boolean velocityFinite = finite(source.getFieldVx())
                 && finite(source.getFieldVy())
                 && finite(source.getAngularVelocityRadPerSec());
-        boolean poseValid = source.isPoseValid() && poseFinite;
-        boolean velocityValid = source.isVelocityValid() && velocityFinite;
+        double acquired = source.getAcquisitionTimestampSec();
+        boolean healthy = source.isDeviceHealthy() && finite(acquired) && acquired <= timestampSec + 1e-9;
+        if (generation != source.getResetGeneration()) {
+            hasBaseline = false;
+            generation = source.getResetGeneration();
+        }
+        boolean poseValid = source.isPoseValid() && poseFinite && healthy;
+        boolean velocityValid = source.isVelocityValid() && velocityFinite && healthy;
 
         double x = poseFinite ? source.getX() : 0.0;
         double y = poseFinite ? source.getY() : 0.0;
@@ -69,7 +77,7 @@ public final class RobotStateEstimator {
         double ax = 0.0;
         double ay = 0.0;
         double alpha = 0.0;
-        double dt = timestampSec - baselineTimeSec;
+        double dt = acquired - baselineTimeSec;
         if (velocityValid && hasBaseline && dt > MIN_DT_SEC) {
             ax = (vx - baselineVx) / dt;
             ay = (vy - baselineVy) / dt;
@@ -83,9 +91,9 @@ public final class RobotStateEstimator {
 
         if (!velocityValid) {
             hasBaseline = false;
-        } else if (!hasBaseline || timestampSec > baselineTimeSec) {
+        } else if (!hasBaseline || acquired > baselineTimeSec) {
             hasBaseline = true;
-            baselineTimeSec = timestampSec;
+            baselineTimeSec = acquired;
             baselineVx = vx;
             baselineVy = vy;
             baselineOmega = omega;
@@ -103,7 +111,7 @@ public final class RobotStateEstimator {
                 ay,
                 alpha,
                 poseValid,
-                velocityValid);
+                velocityValid, acquired, healthy, generation);
         return state;
     }
 
