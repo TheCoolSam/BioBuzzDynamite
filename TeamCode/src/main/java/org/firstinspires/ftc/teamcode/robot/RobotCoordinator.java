@@ -11,7 +11,7 @@ import org.firstinspires.ftc.teamcode.math.AngleUtil;
 /** One snapshot, one actuator owner, coherent resets, and bounded lower-cadence planning. */
 public final class RobotCoordinator {
     public static final class Input {
-        public boolean enabled,intake,shoot,cancel,cancelShot,resetFault,unwindAssist;
+        public boolean enabled,intake,shoot,burst,cancel,cancelShot,resetFault,unwindAssist;
         public double fieldX,fieldY,turn;
         public BallType expectedPickupType;
     }
@@ -27,6 +27,13 @@ public final class RobotCoordinator {
     private final double aimTolerance,maxMotion,maxTurretRate;
     private double intakePower=.25;
     private double pivotForward,pivotLeft;
+    private MotionShotSolver movingShots;
+    private MotionConfidence motionConfidence;
+    private double committedReleaseSec=Double.NaN;
+    private double previousTurretAngle=Double.NaN,previousTurretRate,previousTurretSec;
+    public MotionShotSolver.Solution shotSolution;
+    public double shotMissBoundInches=Double.NaN;
+    public String shotConfidence="STATIONARY SHOTS";
     private int targetId=Integer.MIN_VALUE;
     private double hiveFrameFloor=Double.NEGATIVE_INFINITY;
     private PreferredPoseShotSetup scoringPoses;
@@ -54,6 +61,10 @@ public final class RobotCoordinator {
         if(!Double.isFinite(forward)||!Double.isFinite(left))throw new IllegalArgumentException("Measured turret pivot required");
         pivotForward=forward;pivotLeft=left;
     }
+    public void setMovingShots(MotionShotSolver.Settings settings) {
+        movingShots=new MotionShotSolver(settings);motionConfidence=new MotionConfidence(settings.motion);
+        committedReleaseSec=Double.NaN;
+    }
     public void setScoringPoses(PreferredPoseShotSetup poses,double positionTolerance,double headingTolerance) {
         if(poses==null||!poses.hasMeasuredCycle()||!Double.isFinite(positionTolerance)||positionTolerance<=0
                 ||!Double.isFinite(headingTolerance)||headingTolerance<=0)throw new IllegalArgumentException("Measured scoring poses/tolerances required");
@@ -69,6 +80,8 @@ public final class RobotCoordinator {
     public void localizationReset(double now,long generation) {
         io.stop();history.clear();tracker.reset(now,generation);turret.reset();hive.reset();plan=null;
         this.generation=generation;lastPlan=Double.NEGATIVE_INFINITY;scoring.cancel();targetId=Integer.MIN_VALUE;hiveFrameFloor=now;
+        if(motionConfidence!=null)motionConfidence.reset();committedReleaseSec=Double.NaN;shotSolution=null;
+        previousTurretAngle=Double.NaN;
     }
     public void consumedTrack(int id,double now) {tracker.consume(id,now);plan=null;}
     public void cycle(Input input,double now,double dt) {
@@ -115,16 +128,49 @@ public final class RobotCoordinator {
             if(targetFresh&&targetId!=snapshot.target.targetId) {hive.reset();turret.reset();targetId=snapshot.target.targetId;}
             if(targetFresh&&snapshot.target.exposureSec>hiveFrameFloor)hive.observe(snapshot.target.hive,snapshot.target.exposureSec,true);
             RobotState pivot=pivotState(snapshot.robot);
+            ScoringController.State before=scoring.state();
+            boolean releasing=before==ScoringController.State.FEED_ONE||before==ScoringController.State.CONFIRM_EXIT;
+            if(!releasing)committedReleaseSec=Double.NaN;
+            shotSolution=null;
+            shotMissBoundInches=Double.NaN;
+            double aimX=targetFresh?snapshot.target.x:Double.NaN,aimY=targetFresh?snapshot.target.y:Double.NaN;
+            if(movingShots!=null) {
+                boolean trusted=motionConfidence.update(snapshot.robot,now);
+                double turretDt=snapshot.acquiredSec-previousTurretSec;
+                boolean turretTrusted=Double.isFinite(previousTurretAngle)&&turretDt>0&&turretDt<=movingShots.settings.motion.maxAge
+                        &&Math.abs(snapshot.turretVelocity-previousTurretRate)/turretDt<=movingShots.settings.maxTurretAcceleration
+                        &&Math.abs(snapshot.turretAngle-previousTurretAngle-.5*(snapshot.turretVelocity+previousTurretRate)*turretDt)
+                            <=movingShots.settings.motion.headingResidual;
+                previousTurretAngle=snapshot.turretAngle;previousTurretRate=snapshot.turretVelocity;previousTurretSec=snapshot.acquiredSec;
+                trusted &= turretTrusted;
+                double releaseSec=releasing&&Double.isFinite(committedReleaseSec)?Math.max(now,committedReleaseSec)
+                        :now+movingShots.settings.releaseDelaySec;
+                if(targetFresh)shotSolution=movingShots.solve(scoring.selector(),inventory.first(),snapshot.robot,now,releaseSec,
+                        motionConfidence.ax,motionConfidence.ay,motionConfidence.alpha,pivotForward,pivotLeft,
+                        snapshot.turretAngle,snapshot.turretVelocity,snapshot.target.x,snapshot.target.y,trusted);
+                shotConfidence=shotSolution==null?"NO CALIBRATED MOTION SOLUTION":!turretTrusted?"TURRET MOTION OUTSIDE CALIBRATION":!trusted?motionConfidence.reason:
+                        !shotSolution.confident?"PREDICTED MISS EXCEEDS BOUND":"RELEASE PREDICTION WITHIN BOUNDS";
+                if(shotSolution!=null) {
+                    shotMissBoundInches=shotSolution.errorBoundInches;
+                    double delay=shotSolution.releaseSec-now;
+                    double bearingNow=shotSolution.bearing-AngleUtil.wrapRadians(shotSolution.releaseHeading-snapshot.robot.getHeadingRad())
+                            -snapshot.turretVelocity*delay;
+                    aimX=pivot.getFieldX()+shotSolution.equivalentRange*Math.cos(bearingNow);
+                    aimY=pivot.getFieldY()+shotSolution.equivalentRange*Math.sin(bearingNow);
+                }
+            }
             TurretCommand aim=targetFresh?turret.calculate(TurretStateAdapter.toTurretState(pivot,
-                    snapshot.turretAngle,snapshot.turretVelocity,snapshot.target.x,snapshot.target.y,dt,now)):null;
+                    snapshot.turretAngle,snapshot.turretVelocity,aimX,aimY,dt,now)):null;
             if(!targetFresh)turret.reset();
             ScoringController.Input shot=new ScoringController.Input();
             shot.nowSec=now;shot.acquiredSec=snapshot.acquiredSec;shot.healthy=snapshot.healthy;
             shot.enabled=input.enabled;shot.start=input.shoot;shot.cancel=input.cancel||input.cancelShot;
+            shot.burst=input.burst;
             shot.resetFault=input.resetFault&&!input.enabled&&!input.shoot&&!input.intake&&input.fieldX==0&&input.fieldY==0&&input.turn==0;
             shot.staged=snapshot.staged;shot.exit=snapshot.exit;shot.rpm=snapshot.rpm;
             shot.targetFresh=targetFresh;shot.targetObservedSec=targetFresh?snapshot.target.exposureSec:Double.NaN;
             shot.hiveObservedSec=shot.targetObservedSec;
+            shot.targetId=targetFresh?snapshot.target.targetId:Integer.MIN_VALUE;
             shot.rangeInches=targetFresh?Math.hypot(snapshot.target.x-pivot.getFieldX(),snapshot.target.y-pivot.getFieldY()):Double.NaN;
             shot.aimReady=aim!=null&&aim.tracking&&aim.targetReachable
                     &&Math.abs(AngleUtil.wrapRadians(aim.targetBearing-snapshot.robot.getHeadingRad()-snapshot.turretAngle))<=aimTolerance;
@@ -135,10 +181,33 @@ public final class RobotCoordinator {
             }
             shot.stationary=snapshot.robot.isVelocityValid()&&Math.hypot(snapshot.robot.getFieldVx(),snapshot.robot.getFieldVy())<=maxMotion
                     &&Math.abs(snapshot.robot.getAngularVelocityRadPerSec())<=maxTurretRate&&Math.abs(snapshot.turretVelocity)<=maxTurretRate;
+            if(movingShots!=null) {
+                // With compensation configured, even a stopped robot needs a valid calibrated solution.
+                shot.stationary=false;
+                shot.motionReady=shotSolution!=null&&shotSolution.confident;
+                shot.aimReady &= shotSolution!=null;
+                if(shotSolution!=null) {
+                    shot.selectedShot=shotSolution.selection;shot.rangeInches=shotSolution.equivalentRange;
+                    shot.releaseDelaySec=shotSolution.releaseSec-now;
+                    shot.releaseSec=shotSolution.releaseSec;
+                    shot.releaseUncertaintySec=movingShots.settings.releaseUncertaintySec;
+                    double futureTurret=snapshot.turretAngle+snapshot.turretVelocity*shot.releaseDelaySec;
+                    double physicalBearing=shotSolution.releaseHeading+futureTurret;
+                    double aimError=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-physicalBearing));
+                    shotMissBoundInches+=shotSolution.equivalentRange*Math.sin(Math.min(Math.PI/2,aimError));
+                    if(shot.motionReady&&shotMissBoundInches>movingShots.settings.maxMissInches) {
+                        shot.motionReady=false;shotConfidence="AIM ERROR EXCEEDS MISS BOUND";
+                    }
+                    shot.aimReady &= turret.releaseAngleReachable(futureTurret)
+                            &&aimError<=aimTolerance;
+                }
+            }
             HiveTracker.State hiveState=hive.state(now);
+            shot.hiveState=hiveState;
             shot.hiveStable=hiveState==HiveTracker.State.SIDE_A_UP||hiveState==HiveTracker.State.SIDE_B_UP;
-            ScoringController.State before=scoring.state();
             ScoringController.Output output=scoring.update(shot);
+            if(movingShots!=null&&!releasing&&scoring.state()==ScoringController.State.FEED_ONE&&output.feeder>0)
+                committedReleaseSec=shotSolution.releaseSec;
             if(before!=ScoringController.State.WAIT_FOR_HIVE&&scoring.state()==ScoringController.State.WAIT_FOR_HIVE) {
                 hive.reset();hiveFrameFloor=now;
             }
@@ -150,7 +219,7 @@ public final class RobotCoordinator {
                 command.transfer=output.transfer;command.feeder=output.feeder;
                 command.intake=input.intake&&inventory.canIntake()&&scoring.state()==ScoringController.State.IDLE?intakePower:0;
             }
-            command.reason=reason=output.reason;io.write(command);
+            command.reason=reason=output.reason+(movingShots!=null&&!shot.motionReady?"; "+shotConfidence:"");io.write(command);
         } catch(RuntimeException failure) {fault=true;reason="ROBOT FAULT: "+failure.getClass().getSimpleName();scoring.cancel();io.stop();}
     }
 }

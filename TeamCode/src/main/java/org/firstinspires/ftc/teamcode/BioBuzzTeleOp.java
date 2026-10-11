@@ -9,7 +9,7 @@ import org.firstinspires.ftc.teamcode.vision.pieces.*;
 import org.firstinspires.ftc.teamcode.planning.pickup.*;
 import java.util.*;
 
-/** Integrated stationary-scoring TeleOp. Remains powerless until measured settings exist. */
+/** Integrated calibrated scoring TeleOp. Remains powerless until measured settings exist. */
 @TeleOp(name="BIOBUZZ TeleOp",group="Competition")
 public class BioBuzzTeleOp extends OpMode {
     protected RobotHardwareConfig.Settings settings;
@@ -30,14 +30,19 @@ public class BioBuzzTeleOp extends OpMode {
         if(settings!=null)try {
             settings.validate();io=new RevRobotIO(hardwareMap,settings,epochNanos);
             PieceInventory inventory=new PieceInventory(4);inventory.reconcile(settings.confirmedPreload);
-            ScoringController scoring=new ScoringController(inventory,settings.recipes,settings.scoringTiming,settings.feedPower,settings.reversePower);
+            ScoringController scoring=settings.shotTable==null
+                    ?new ScoringController(inventory,settings.recipes,settings.scoringTiming,settings.feedPower,settings.reversePower)
+                    :new ScoringController(inventory,settings.shotTable,settings.scoringTiming,settings.feedPower,settings.reversePower,settings.burst);
+            if(settings.shotTable!=null)scoring.setRetargetTolerance(settings.rpmRetargetFraction,settings.hoodRetargetTolerance,settings.compressionRetargetTolerance);
+            if(settings.shotTable!=null)scoring.setFlightTiming(settings.exitLatencySec,settings.impactSettleSec);
             robot=new RobotCoordinator(io,inventory,scoring,new PieceTracker(settings.floor,settings.pieces),
                     new PickupPlanner(settings.tipModel,settings.travel,settings.shots,settings.footprint),
                     new TurretController(settings.turretProfile),new DriveAssist(settings.yawAtFullPower,.3,.08),
                     new HiveTracker(settings.hiveSettleSec,settings.hiveMaxAgeSec),settings.aimTolerance,settings.maxMotion,settings.maxTurretRate);
             robot.setIntakePower(settings.intakePower);
             robot.setTurretPivot(settings.camera.pivotForward(),settings.camera.pivotLeft());
-            robot.setScoringPoses(settings.shots,settings.scoringPositionTolerance,settings.scoringHeadingTolerance);
+            if(settings.shotTable==null)robot.setScoringPoses(settings.shots,settings.scoringPositionTolerance,settings.scoringHeadingTolerance);
+            if(settings.movingShots!=null)robot.setMovingShots(settings.movingShots);
             configurationFault="";
         }catch(RuntimeException failure) {configurationFault=failure.getMessage();if(io!=null)io.close();io=null;robot=null;}
         display();
@@ -55,6 +60,7 @@ public class BioBuzzTeleOp extends OpMode {
         input.enabled=gamepad1.right_bumper;
         input.cancel=gamepad1.b;input.resetFault=gamepad1.back&&gamepad1.start;
         input.intake=gamepad1.left_trigger>.5;input.shoot=gamepad1.a;
+        input.burst=settings!=null&&settings.burst!=null;
         input.unwindAssist=gamepad1.left_bumper;
         input.fieldX=deadband(gamepad1.left_stick_x);input.fieldY=deadband(-gamepad1.left_stick_y);
         input.turn=deadband(gamepad1.right_stick_x);
@@ -109,9 +115,14 @@ public class BioBuzzTeleOp extends OpMode {
         if(robot==null) {telemetry.addData("MOTION DISABLED",configurationFault);telemetry.addLine("Configure RobotHardwareConfig with measured hardware/recipes and bench acceptance.");return;}
         telemetry.addData("Scoring",robot.scoring.state());telemetry.addData("Inventory",robot.inventory.load());
         telemetry.addData("Inventory confirmed",robot.inventory.isConfirmed());telemetry.addData("Recovery draft",recoveryDraft);
+        telemetry.addData("Balls in flight",robot.scoring.inFlight().size());telemetry.addData("Shot confidence",robot.shotConfidence);
+        if(robot.shotSolution!=null) {
+            telemetry.addData("Shot range (in)",robot.shotSolution.equivalentRange);
+            telemetry.addData("Predicted miss bound (in)",robot.shotMissBoundInches);
+        }
         telemetry.addData("Inhibit",robot.reason);telemetry.addData("Pickup strategy",robot.plan==null?"none":robot.plan.getDecision());
         telemetry.addData("Pickup assist",settings.pickupMotion==null?"awaits measured motion settings":pickupReason);
-        telemetry.addLine("Hold RB enable; A shot; LT intake; B cancel; LB unwind assist; neutral BACK+START reset");
+        telemetry.addLine("Hold RB enable; A shot (hold for configured burst); LT intake; B cancel; LB unwind assist; neutral BACK+START reset");
         telemetry.addLine("Hold X with neutral sticks: one confirmed pickup or scoring-position move; release/repress to replan.");
         telemetry.addLine("Disabled recovery G2: UP pollen, DOWN nectar in feed order; X undo; Y clear; BACK+START confirm inspected queue.");
     }

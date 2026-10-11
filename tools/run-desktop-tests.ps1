@@ -41,7 +41,7 @@ foreach ($package in @('math', 'match', 'planning/pickup', 'state', 'turret', 'v
 foreach ($name in @('PedroManualDrive', 'PedroMappedReading', 'PedroPoseAdapter')) {
     $sources += Join-Path $sourceRoot ('pedro/' + $name + '.java')
 }
-$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios')
+$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios', 'MovingShotScenarios')
 foreach ($scenario in $scenarios) {
     $sources += Join-Path $sourceRoot ('test/' + $scenario + '.java')
 }

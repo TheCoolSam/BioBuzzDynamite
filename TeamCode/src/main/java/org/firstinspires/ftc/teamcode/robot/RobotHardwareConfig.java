@@ -32,6 +32,11 @@ public final class RobotHardwareConfig {
         public TurretControlProfile turretProfile;
         public ScoringController.Timing scoringTiming;
         public List<ShotRecipe> recipes=Collections.emptyList();
+        public CalibratedShotTable shotTable;
+        public MotionShotSolver.Settings movingShots;
+        public BurstPolicy burst;
+        public double rpmRetargetFraction=Double.NaN,hoodRetargetTolerance=Double.NaN,compressionRetargetTolerance=Double.NaN;
+        public double exitLatencySec=Double.NaN,impactSettleSec=Double.NaN;
         public SweptCaptureFeasibility footprint;
         public PickupAssist.Settings pickupMotion;
         public HomographyFloorProjection floor;
@@ -63,7 +68,7 @@ public final class RobotHardwareConfig {
             if(mechanismPowerCap>1||flywheelPidf==null||turretProfile==null||!turretProfile.measured
                     ||scoringTiming==null||footprint==null||floor==null||!floor.isConfigured()||pieces==null
                     ||tipModel==null||travel==null||shots==null||!shots.hasMeasuredCycle()||camera==null||cellClassifier==null
-                    ||entryClassifier==null||cameraPipeline<0||allianceCellIds.length==0||recipes.isEmpty())throw new IllegalStateException("Measured mechanism/vision/planning configuration incomplete");
+                    ||entryClassifier==null||cameraPipeline<0||allianceCellIds.length==0||(recipes.isEmpty()&&shotTable==null))throw new IllegalStateException("Measured mechanism/vision/planning configuration incomplete");
             if(!pieces.isTimingMeasured()||pieces.alliance==AllianceColor.UNKNOWN||pieces.pollenCameraId==pieces.redNectarCameraId
                     ||pieces.pollenCameraId==pieces.blueNectarCameraId||pieces.redNectarCameraId==pieces.blueNectarCameraId)
                 throw new IllegalStateException("Measured floor camera timing, taught IDs and alliance required");
@@ -71,6 +76,30 @@ public final class RobotHardwareConfig {
                 if(!Double.isFinite(n)||n<=0)throw new IllegalStateException("Measured tracker thresholds required");
             for(ShotRecipe r:recipes)if(r==null||r.rpm>maxRpm||!r.rangeCalibrated)throw new IllegalStateException("Recipe requires characterized flywheel/target range");
             for(ShotRecipe r:recipes)if(r.settleSec>=scoringTiming.prepare||r.rpmStableSec>=scoringTiming.prepare)throw new IllegalStateException("Shot settling exceeds prepare timeout");
+            Set<BallType> configuredTypes=new HashSet<BallType>();
+            if(shotTable!=null)for(double n:new double[]{rpmRetargetFraction,hoodRetargetTolerance,compressionRetargetTolerance})
+                if(!Double.isFinite(n)||n<=0||n>1)throw new IllegalStateException("Measured shot retarget envelope required");
+            if(shotTable!=null&&(!Double.isFinite(exitLatencySec)||exitLatencySec<sensorDebounceSec))
+                throw new IllegalStateException("Measured exit latency must cover sensor debounce/read latency");
+            if(shotTable!=null&&(!Double.isFinite(impactSettleSec)||impactSettleSec<hiveSettleSec))
+                throw new IllegalStateException("Measured impact settling must cover HIVE motion/observation settling");
+            if(shotTable!=null)for(CalibratedShotTable.Point p:shotTable.points()) {
+                ShotRecipe r=p.recipe;configuredTypes.add(r.type);
+                if(r.rpm>maxRpm||r.settleSec>=scoringTiming.prepare||r.rpmStableSec>=scoringTiming.prepare)
+                    throw new IllegalStateException("Calibration exceeds launcher/timing limits");
+            }
+            if(shotTable==null)for(ShotRecipe r:recipes)if(!configuredTypes.add(r.type))
+                throw new IllegalStateException("Duplicate ball type requires range table");
+            if(configuredTypes.size()!=BallType.values().length)throw new IllegalStateException("Calibrate every ball type");
+            if((movingShots!=null||burst!=null)&&shotTable==null)throw new IllegalStateException("Moving/burst shots require range and flight calibration");
+            if(movingShots!=null&&(movingShots.releaseDelaySec+movingShots.releaseUncertaintySec>=scoringTiming.feed
+                    ||movingShots.motion.maxAge>.2))throw new IllegalStateException("Release delay must fit feed pulse and snapshot freshness");
+            if(burst!=null&&burst.impactSettleSec<hiveSettleSec)throw new IllegalStateException("Burst impact settling must cover HIVE settling");
+            if(burst!=null&&burst.releaseDelaySec+burst.releaseUncertaintySec>=scoringTiming.feed)
+                throw new IllegalStateException("Burst release delay must fit feed pulse");
+            if(burst!=null&&movingShots!=null&&(burst.releaseDelaySec!=movingShots.releaseDelaySec
+                    ||burst.releaseUncertaintySec!=movingShots.releaseUncertaintySec))
+                throw new IllegalStateException("Burst and solver must use the same release measurements");
             if(hiveSettleSec>=scoringTiming.hive)throw new IllegalStateException("HIVE settling exceeds reacquisition timeout");
             Set<Integer> ids=new HashSet<Integer>();
             for(int id:allianceCellIds)if(id<0||!ids.add(id))throw new IllegalStateException("Unique measured target IDs required");

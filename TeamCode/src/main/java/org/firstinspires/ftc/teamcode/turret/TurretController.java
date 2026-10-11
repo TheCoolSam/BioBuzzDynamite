@@ -38,6 +38,10 @@ public class TurretController {
         recoverySide = RecoverySide.NONE;
         lastUnwindMagnitude = 0.0;
     }
+    /** A predicted encoder angle must remain inside the same operating interval as tracking. */
+    public boolean releaseAngleReachable(double angle) {
+        return Double.isFinite(angle)&&angle>=profile.OPERATING_MIN_RAD&&angle<=profile.OPERATING_MAX_RAD;
+    }
 
     public TurretCommand calculate(TurretState state) {
         if (state != null && state.resetGeneration != generation) {
