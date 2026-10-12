@@ -14,8 +14,10 @@ robot/scoring/autonomous scenarios. Any compilation error or failed assertion st
 Output goes into the ignored `build/desktop-tests` directory.
 
 `CompetitionReadinessScenarios` additionally checks persistent autonomous action
-IDs, constrained wall departure, independent stationary scoring, basic mecanum
-mixing, deliberate drive-only recovery and observer outcomes with run identity.
+IDs, constrained wall departure and wall-adjacent oriented park, driver stick
+mapping, MANUAL hub bulk caching, health debounce, flywheel hold, a multi-shot
+fixed-route handoff, independent stationary scoring, basic mecanum mixing,
+deliberate drive-only recovery and observer outcomes with run identity.
 The measured profiles remain disabled until physical acceptance. For controls,
 configuration dependencies and recovery limits, see
 [`COMPETITION_READINESS_IMPLEMENTATION_2026-10-11.md`](../doc/audits/COMPETITION_READINESS_IMPLEMENTATION_2026-10-11.md).

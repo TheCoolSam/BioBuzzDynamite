@@ -28,6 +28,9 @@ public final class RobotHardwareConfig {
         public LauncherFeedback.Limits launcherLimits;
         public boolean flywheelReverse,intakeReverse,transferReverse,feederReverse;
         public double flywheelTicksPerRev=Double.NaN, maxRpm=Double.NaN, mechanismPowerCap=Double.NaN;
+        /** Measured idle/hold RPM between shots. NaN keeps the flywheel stopped until the next prepare/pre-spin. */
+        public double flywheelHoldRpm=Double.NaN;
+        public AllianceColor alliance=AllianceColor.UNKNOWN;
         public double intakePower=Double.NaN,feedPower=Double.NaN,reversePower=Double.NaN;
         public PIDFCoefficients flywheelPidf;
         public boolean entryActiveLow,stageActiveLow,exitActiveLow;
@@ -72,6 +75,7 @@ public final class RobotHardwareConfig {
                     ||camera==null||!camera.hasCellGeometry()||(movingShots==null&&stationaryShots==null)||shotTable==null)
                 throw new IllegalStateException("Measured output-side feedback, geometry, cell point, release solver and revision required");
             if(!benchAccepted)throw new IllegalStateException("Physical bench acceptance required");
+            if(alliance==null||alliance==AllianceColor.UNKNOWN)throw new IllegalStateException("Match alliance required for field-centric driver mapping");
             String[] names={pitchSensor,gapSensor,flywheel,hood,compression,intake,transfer,feeder,entrySensor,stageSensor,exitSensor,limelight,
                     PedroConstants.FRONT_LEFT_MOTOR,PedroConstants.BACK_LEFT_MOTOR,PedroConstants.FRONT_RIGHT_MOTOR,
                     PedroConstants.BACK_RIGHT_MOTOR,PedroConstants.PINPOINT_NAME,TurretHardwareConfig.SERVO_NAME,TurretHardwareConfig.ENCODER_NAME};
@@ -80,6 +84,8 @@ public final class RobotHardwareConfig {
             if(pickupPlanningEnabled&&(huskyLens==null||huskyLens.trim().isEmpty()||!unique.add(huskyLens)))
                 throw new IllegalStateException("Unique floor camera name required");
             for(double n:new double[]{flywheelTicksPerRev,maxRpm,mechanismPowerCap,intakePower,feedPower,reversePower,sensorDebounceSec,yawAtFullPower,aimTolerance,maxMotion,maxTurretRate,hiveSettleSec,hiveMaxAgeSec,scoringPositionTolerance,scoringHeadingTolerance})if(!Double.isFinite(n)||n<=0)throw new IllegalStateException("Measured speeds/tolerances required");
+            if(Double.isFinite(flywheelHoldRpm)&&(flywheelHoldRpm<=0||flywheelHoldRpm>maxRpm))
+                throw new IllegalStateException("Measured hold RPM must be inside the characterized flywheel range");
             if(intakePower>mechanismPowerCap||feedPower>mechanismPowerCap||reversePower>mechanismPowerCap)throw new IllegalStateException("Mechanism powers exceed bench cap");
             if(mechanismPowerCap>1||flywheelPidf==null||turretProfile==null||!turretProfile.measured
                     ||scoringTiming==null||camera==null||cellClassifier==null
@@ -88,7 +94,9 @@ public final class RobotHardwareConfig {
                 throw new IllegalStateException("Measured stable windows must fit prepare timeout");
             if(pickupPlanningEnabled&&(floor==null||!floor.isConfigured()||pieces==null||footprint==null||tipModel==null||travel==null
                     ||shots==null||!shots.hasMeasuredCycle()))throw new IllegalStateException("Measured pickup dependencies required");
-            if(pickupPlanningEnabled&&(!pieces.isTimingMeasured()||pieces.alliance==AllianceColor.UNKNOWN||pieces.pollenCameraId==pieces.redNectarCameraId
+            if(pickupPlanningEnabled&&pieces!=null&&pieces.alliance!=alliance)
+                throw new IllegalStateException("Driver alliance must match floor-camera alliance");
+            if(pickupPlanningEnabled&&(!pieces.isTimingMeasured()||pieces.alliance==AllianceColor.UNKNOWN||pieces.pollenCameraId==pieces.redNectarCameraId)
                     ||pieces.pollenCameraId==pieces.blueNectarCameraId||pieces.redNectarCameraId==pieces.blueNectarCameraId))
                 throw new IllegalStateException("Measured floor camera timing, taught IDs and alliance required");
             if(pickupPlanningEnabled)for(double n:new double[]{pieces.associationGateInches,pieces.trackTimeoutSec,pieces.matureHitCount})
