@@ -9,6 +9,7 @@ import org.firstinspires.ftc.teamcode.planning.pickup.TrackedPiece;
 import org.firstinspires.ftc.teamcode.state.RobotStateHistory;
 import org.firstinspires.ftc.teamcode.vision.pieces.HomographyFloorProjection;
 import org.firstinspires.ftc.teamcode.vision.pieces.HuskyLensPieceObservationSource;
+import org.firstinspires.ftc.teamcode.vision.pieces.HuskyLensWorker;
 import org.firstinspires.ftc.teamcode.vision.pieces.PieceObservation;
 import org.firstinspires.ftc.teamcode.vision.pieces.PieceTracker;
 import org.firstinspires.ftc.teamcode.vision.pieces.PieceTrackerConstants;
@@ -31,10 +32,12 @@ public class HuskyLensPieceTestOpMode extends OpMode {
     private final ElapsedTime timer = new ElapsedTime();
     private final RobotStateHistory history = new RobotStateHistory();
     private HuskyLensPieceObservationSource source;
+    private HuskyLensWorker worker;
     private PieceTracker tracker;
     private PieceTrackerConstants constants;
     private boolean cameraReady;
     private String failure = "";
+    private long epochNanos;
 
     @Override
     public void init() {
@@ -49,6 +52,10 @@ public class HuskyLensPieceTestOpMode extends OpMode {
             cameraReady = alive && selected;
             if (!cameraReady) {
                 failure = alive ? "algorithm not selected" : "knock failed";
+            } else {
+                epochNanos = System.nanoTime();
+                worker = new HuskyLensWorker(source, epochNanos);
+                worker.start();
             }
         } catch (RuntimeException e) {
             cameraReady = false;
@@ -63,12 +70,19 @@ public class HuskyLensPieceTestOpMode extends OpMode {
     @Override
     public void loop() {
         double now = timer.seconds();
-        List<PieceObservation> observations = source == null
-                ? java.util.Collections.<PieceObservation>emptyList()
-                : source.read(now);
+        boolean workerHealthy = worker != null && worker.healthy();
+        List<PieceObservation> observations = workerHealthy
+                ? worker.latest()
+                : java.util.Collections.<PieceObservation>emptyList();
         PieceTrackingResult result = tracker.update(observations, history, now);
 
         telemetry.addData("Camera", cameraReady ? "ready" : failure);
+        telemetry.addData("Worker", worker == null ? "not started"
+                : (workerHealthy ? "healthy" : "UNHEALTHY: " + worker.lastError()));
+        if (worker != null) {
+            telemetry.addData("Worker restarts / last success age s", "%d / %.3f",
+                    worker.restartCount(), worker.lastSuccessAgeSec());
+        }
         telemetry.addData("Camera latency s", constants.huskyLensLatencySec);
         telemetry.addData("Raw detections", observations.size());
         for (int i = 0; i < observations.size(); i++) {
@@ -122,5 +136,10 @@ public class HuskyLensPieceTestOpMode extends OpMode {
                     piece.getFieldX(),
                     piece.getFieldY());
         }
+    }
+
+    @Override
+    public void stop() {
+        if (worker != null) worker.close();
     }
 }

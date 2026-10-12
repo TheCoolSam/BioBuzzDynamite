@@ -213,6 +213,19 @@ public final class CompetitionReadinessScenarios {
         check(view.driveCommandable&&!view.timingLatched,"single long loop does not latch");
         watch.update(good,false);view=watch.update(good,false);
         check(view.timingLatched&&!view.driveCommandable,"persistent overruns latch timing fail-closed");
+        check(RobotIO.Health.yawHealthy(true,false,false),"live analog and no trip is yaw-healthy");
+        check(!RobotIO.Health.yawHealthy(false,false,false),"analog disconnect is not yaw-healthy");
+        check(!RobotIO.Health.yawHealthy(true,true,false),"wrong-direction trip is not yaw-healthy");
+        check(!RobotIO.Health.yawHealthy(true,false,true),"turret write fault is not yaw-healthy");
+        io=new RecoveryIO();c=coordinator(io,inventory());
+        in=new RobotCoordinator.Input();in.enabled=true;in.fieldX=.25;
+        io.at(0,new RobotIO.Health(true,true,RobotIO.Health.yawHealthy(false,false,false),true,true));
+        c.cycle(in,0,.02);
+        check(io.output.enabled&&io.output.fieldX==.25&&io.output.turretPower==0,
+                "analog disconnect degrades yaw and keeps drive");
+        io.at(.02,new RobotIO.Health(true,true,RobotIO.Health.yawHealthy(true,true,false),true,true));
+        c.cycle(in,.02,.02);
+        check(io.output.enabled&&io.output.turretPower==0,"wrong-direction trip degrades yaw and keeps drive");
     }
     private static final class FakeHub implements HubBulkCache.Hub {
         int manuals,clears;

@@ -29,7 +29,7 @@ public final class CellTargetGeometry {
         for(Point p:points)if(p.tagId==id&&p.state==state)return p;
         return null;
     }
-    /** SDK yaw/pitch/roll: Rz(yaw) Ry(pitch) Rx(roll). */
+    /** Rz(yaw) Ry(pitch) Rx(roll). Limelight camera-space arrays must be remapped first; see LimelightCameraPose. */
     public static double[] rotation(double yaw,double pitch,double roll) {
         double cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch),cr=Math.cos(roll),sr=Math.sin(roll);
         return new double[]{cy*cp,cy*sp*sr-sy*cr,cy*sp*cr+sy*sr,

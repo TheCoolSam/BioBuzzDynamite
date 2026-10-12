@@ -117,6 +117,59 @@ public final class LauncherCalibrationScenarios {
         CameraTargetTransform transform=new CameraTargetTransform(new double[]{1,0,0,0,1,0,0,0,1},0,0,0,0,10,1,200,cells);
         TargetEstimate target=transform.project(80,0,0,CellTargetGeometry.rotation(Math.PI/2,0,0),0,1,HiveTracker.State.SIDE_A_UP,history,yaw,0);
         check(target!=null&&target.internalPoint,"camera projects measured cell point");near(target.y,2,"camera tag-to-cell lateral offset");near(target.z,11,"camera and cell heights combined");
+        offAxisCell(cells,history,yaw);
+    }
+    private static void offAxisCell(CellTargetGeometry cells,RobotStateHistory history,TurretPoseHistory unused) {
+        CameraTargetTransform transform=new CameraTargetTransform(new double[]{1,0,0,0,1,0,0,0,1},0,0,0,0,10,1,200,cells);
+        TargetEstimate origin=transform.project(80,0,0,CellTargetGeometry.rotation(0,0,0),0,1,HiveTracker.State.SIDE_A_UP,history,unused,0);
+        check(origin!=null,"face-on cell exists");
+        for(double yawDeg:new double[]{-30,0,30}) {
+            double yaw=Math.toRadians(yawDeg);
+            double[] rCam=CellTargetGeometry.rotation(-yaw,0,0);
+            double[] tCam=mul(rCam,new double[]{80,0,0});
+            double[] euler=extractYawPitchRoll(rCam);
+            double[] pose6=new double[]{tCam[0],tCam[1],tCam[2],
+                    Math.toDegrees(euler[1]),Math.toDegrees(euler[0]),Math.toDegrees(euler[2])};
+            TurretPoseHistory at=new TurretPoseHistory();at.add(0,yaw,0);
+            TargetEstimate viewed=transform.project(tCam[0],tCam[1],tCam[2],
+                    LimelightCameraPose.rotationFromTargetPoseCameraSpace(pose6),0,1,HiveTracker.State.SIDE_A_UP,history,at,0);
+            check(viewed!=null,"yaw view exists at "+yawDeg);
+            near(viewed.x,origin.x,"CELL field X fixed at turret yaw "+yawDeg);
+            near(viewed.y,origin.y,"CELL field Y fixed at turret yaw "+yawDeg);
+            near(viewed.z,origin.z,"CELL height fixed at turret yaw "+yawDeg);
+        }
+        for(double pitchDeg:new double[]{-30,30}) {
+            double[] rCam=CellTargetGeometry.rotation(0,Math.toRadians(pitchDeg),0);
+            double[] tCam=new double[]{80,0,0};
+            double[] expectedCam=add(tCam,mul(rCam,new double[]{2,0,1}));
+            double[] euler=extractYawPitchRoll(rCam);
+            double[] pose6=new double[]{tCam[0],tCam[1],tCam[2],
+                    Math.toDegrees(euler[1]),Math.toDegrees(euler[0]),Math.toDegrees(euler[2])};
+            double[] parsed=LimelightCameraPose.rotationFromTargetPoseCameraSpace(pose6);
+            double[] actualCam=add(tCam,mul(parsed,new double[]{2,0,1}));
+            near(actualCam[0],expectedCam[0],"pitch "+pitchDeg+" CELL camera X");
+            near(actualCam[1],expectedCam[1],"pitch "+pitchDeg+" CELL camera Y");
+            near(actualCam[2],expectedCam[2],"pitch "+pitchDeg+" CELL camera Z");
+            TargetEstimate viewed=transform.project(tCam[0],tCam[1],tCam[2],parsed,0,1,HiveTracker.State.SIDE_A_UP,history,unused,0);
+            double[] sdkMisread=CellTargetGeometry.rotation(Math.toRadians(pose6[5]),Math.toRadians(pose6[4]),Math.toRadians(pose6[3]));
+            TargetEstimate wrong=transform.project(tCam[0],tCam[1],tCam[2],sdkMisread,0,1,HiveTracker.State.SIDE_A_UP,history,unused,0);
+            check(viewed!=null&&(wrong==null||Math.hypot(wrong.x-viewed.x,wrong.y-viewed.y)>0.05),
+                    "SDK yaw/pitch/roll labels move CELL at pitch "+pitchDeg);
+        }
+        double[] fromSdk=LimelightCameraPose.rotationFromSdkLabeledAnglesRad(
+                Math.toRadians(5),Math.toRadians(12),Math.toRadians(-7));
+        double[] fromArray=LimelightCameraPose.rotationFromTargetPoseCameraSpace(new double[]{0,0,80,-7,12,5});
+        for(int i=0;i<9;i++)near(fromSdk[i],fromArray[i],"SDK-labeled remap matches raw array "+i);
+    }
+    private static double[] mul(double[] r,double[] v) {
+        return new double[]{r[0]*v[0]+r[1]*v[1]+r[2]*v[2],r[3]*v[0]+r[4]*v[1]+r[5]*v[2],r[6]*v[0]+r[7]*v[1]+r[8]*v[2]};
+    }
+    private static double[] add(double[] a,double[] b) {return new double[]{a[0]+b[0],a[1]+b[1],a[2]+b[2]};}
+    private static double[] extractYawPitchRoll(double[] r) {
+        double pitch=Math.asin(Math.max(-1,Math.min(1,-r[6])));
+        double yaw=Math.atan2(r[3],r[0]);
+        double roll=Math.atan2(r[7],r[8]);
+        return new double[]{yaw,pitch,roll};
     }
     private static void journal() {
         ShotJournal log=new ShotJournal("SYNTHETIC");ScoringController.Input in=input(0);

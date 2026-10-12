@@ -220,6 +220,19 @@ public final class RobotIntegrationScenarios {
         worker.start();boolean started=reading.await(1,TimeUnit.SECONDS);worker.close();release.countDown();
         check(started,"camera read dispatched");owner.get().join(1000);
         check(!owner.get().isAlive()&&worker.latest().isEmpty(),"closed worker cannot publish delayed read");
+        check(!worker.healthy(),"closed worker is unhealthy");
+        final java.util.concurrent.atomic.AtomicInteger attempts=new java.util.concurrent.atomic.AtomicInteger();
+        HuskyLensWorker recovering=new HuskyLensWorker(time->{
+            if(attempts.getAndIncrement()<2)throw new IllegalStateException("I2C FAULT");
+            return Arrays.asList(PieceObservation.of(1,20,10,4,4,time));
+        },System.nanoTime());
+        recovering.start();
+        long deadline=System.currentTimeMillis()+2000;
+        while(System.currentTimeMillis()<deadline&&!recovering.healthy())Thread.sleep(20);
+        check(recovering.healthy()&&!recovering.latest().isEmpty(),"worker restarts after RuntimeException");
+        check(recovering.restartCount()>=2&&recovering.lastError().isEmpty(),"backoff health is exposed");
+        recovering.close();
+        check(recovering.latest().isEmpty()&&!recovering.healthy(),"unhealthy worker is no fresh data");
         BooleanDebouncer sensor=new BooleanDebouncer(.05);
         check(!sensor.update(false,0),"debounce initial clear");check(!sensor.update(true,.01),"short rising edge held");
         check(!sensor.update(false,.03),"bounce resets dwell");check(!sensor.update(true,.04),"new edge starts dwell");

@@ -2,6 +2,8 @@ package org.firstinspires.ftc.teamcode.scoring;
 
 /** Output-side measured state. Servo.getPosition() must never supply this sample. */
 public final class LauncherFeedback {
+    /** Conservative default for pitch/gap finite-difference smoothing. */
+    public static final double DEFAULT_RATE_TAU_SEC = 0.05;
     public final double acquiredSec,pitchRad,pitchVelocity,gapMm,gapVelocity;
     public LauncherFeedback(double acquiredSec,double pitchRad,double pitchVelocity,double gapMm,double gapVelocity) {
         this.acquiredSec=acquiredSec;this.pitchRad=pitchRad;this.pitchVelocity=pitchVelocity;
