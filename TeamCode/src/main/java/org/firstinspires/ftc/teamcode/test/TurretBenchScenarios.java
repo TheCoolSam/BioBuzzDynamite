@@ -260,6 +260,12 @@ public final class TurretBenchScenarios {
         near(stall.apply(.1, 0, 0, true, .02, true, true, false), 0, "zero velocity beyond stall window trips");
         check(stall.directionFault(), "stall latched");
         near(gate().apply(.1, 0, Double.NaN, true, .02, true, true, false), .1, "missing velocity does not trip fixtures");
+        check(org.firstinspires.ftc.teamcode.robot.RobotIO.Health.yawHealthy(true, false, false),
+                "healthy turret sample is yaw-healthy");
+        check(!org.firstinspires.ftc.teamcode.robot.RobotIO.Health.yawHealthy(false, false, false),
+                "analog disconnect is a yaw fault not a drive fault");
+        check(!org.firstinspires.ftc.teamcode.robot.RobotIO.Health.yawHealthy(true, true, false),
+                "wrong-direction trip is a yaw fault not a drive fault");
     }
     private static void crCommands() {
         check(!TurretCrCommand.stop(null).pwmEnabled && !Double.isFinite(TurretCrCommand.stop(null).sdkPower),

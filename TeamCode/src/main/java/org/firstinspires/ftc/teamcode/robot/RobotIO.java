@@ -13,6 +13,13 @@ public interface RobotIO {
         public Health(boolean drive,boolean localization,boolean yaw,boolean launcher,boolean inventory) {
             this.drive=drive;this.localization=localization;this.yaw=yaw;this.launcher=launcher;this.inventory=inventory;
         }
+        /**
+         * Analog disconnect and wrong-direction/stall degrade yaw only. A CR
+         * zero-write failure is a separate global unknown-output condition.
+         */
+        public static boolean yawHealthy(boolean sensorValid,boolean directionOrStallTrip,boolean writeFault) {
+            return sensorValid&&!directionOrStallTrip&&!writeFault;
+        }
         public boolean allHealthy() {return drive&&localization&&yaw&&launcher&&inventory;}
         @Override public String toString() {return "drive="+drive+" localization="+localization+" yaw="+yaw+" launcher="+launcher+" inventory="+inventory;}
     }

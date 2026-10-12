@@ -40,6 +40,7 @@ public final class RevRobotIO implements RobotIO {
     private LimelightTargetSource target;
     private long lastReadNanos;
     private boolean healthy,fault;
+    private Health lastHealth;
     private double lastDt;
     private HuskyLensWorker floor;
     private RevBasicDrive recoveryDrive;
@@ -151,8 +152,11 @@ public final class RevRobotIO implements RobotIO {
             type=entryBlocked?settings.entryClassifier.classify():null;
         }catch(RuntimeException sensorFailure) {inventoryHealthy=false;}
         boolean timing=TurretEncoderSample.validDt(dt)&&(System.nanoTime()-lastReadNanos)*1e-9<=.2;
-        Health health=new Health(!fault&&timing,robot.isFresh(now,.2),turret.sample.valid,
+        boolean yaw=Health.yawHealthy(turret.sample.valid,turret.safety.directionFault(),
+                !turret.motorFault.isEmpty()&&!turret.safety.directionFault());
+        Health health=new Health(!fault&&timing,robot.isFresh(now,.2),yaw,
                 Double.isFinite(rpm)&&Double.isFinite(pitch)&&Double.isFinite(gap),inventoryHealthy);
+        lastHealth=health;
         healthy=health.allHealthy();
         return new Snapshot(robot,now,turret.getAngleRad(),turret.getVelocityRadPerSec(),rpm,health,
                 entryBlocked,staged,exited,type,aim,
@@ -161,7 +165,7 @@ public final class RevRobotIO implements RobotIO {
     }
     @Override public void write(Command command) {
         double age=(System.nanoTime()-lastReadNanos)*1e-9;
-        if(recovering||command==null||!command.enabled||fault||!healthy||age<0||age>.2
+        if(recovering||command==null||!command.enabled||fault||lastHealth==null||!lastHealth.drive||age<0||age>.2
                 ||!TurretEncoderSample.validDt(lastDt)) {stop();return;}
         for(double n:new double[]{command.fieldX,command.fieldY,command.turn,command.turretPower,
                 command.rpm,command.intake,command.transfer,command.feeder}) {
@@ -191,8 +195,10 @@ public final class RevRobotIO implements RobotIO {
         }
         try {
             if(!PedroManualDrive.request(follower,clamp(command.fieldX,1),clamp(command.fieldY,1),clamp(command.turn,1)))throw new IllegalStateException("Drive request refused");
-            turret.command(command.turretPower,true,true,false);
-            if(!turret.motorFault.isEmpty())throw new IllegalStateException("Turret write fault");
+            if(lastHealth.yaw) turret.command(command.turretPower,true,true,false);
+            else turret.stop();
+            if(turret.safety.directionFault()) turret.stop();
+            else if(!turret.motorFault.isEmpty())throw new IllegalStateException("Turret write fault");
             flywheel.setVelocity(command.rpm*settings.flywheelTicksPerRev/60);
             intake.setPower(clamp(command.intake,settings.mechanismPowerCap));
             transfer.setPower(clamp(command.transfer,settings.mechanismPowerCap));
@@ -227,7 +233,10 @@ public final class RevRobotIO implements RobotIO {
         // Attempt every independent actuator even if an earlier write failed.
         if(follower!=null)try{follower.manual(DrivePowers.zero());}catch(RuntimeException e){fault=true;}
         for(DcMotor motor:motors)try{motor.setPower(0);}catch(RuntimeException e){fault=true;}
-        if(turret!=null) {turret.stop();if(!turret.motorFault.isEmpty())fault=true;}
+        if(turret!=null) {
+            turret.stop();
+            if(!turret.motorFault.isEmpty()&&!turret.safety.directionFault())fault=true;
+        }
         if(recoveryDrive!=null&&!recoveryDrive.stop())fault=true;
     }
     public void close() {stop();if(floor!=null)floor.close();if(target!=null)target.stop();}
