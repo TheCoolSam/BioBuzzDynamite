@@ -7,6 +7,7 @@ import org.firstinspires.ftc.teamcode.scoring.*;
 import org.firstinspires.ftc.teamcode.turret.*;
 import org.firstinspires.ftc.teamcode.vision.pieces.*;
 import org.firstinspires.ftc.teamcode.planning.pickup.*;
+import org.firstinspires.ftc.teamcode.match.AllianceColor;
 import java.util.*;
 
 /** Integrated calibrated scoring TeleOp. Remains powerless until measured settings exist. */
@@ -41,6 +42,7 @@ public class BioBuzzTeleOp extends OpMode {
                     :new ScoringController(inventory,settings.shotTable,settings.scoringTiming,settings.feedPower,settings.reversePower,settings.burst);
             if(settings.shotTable!=null)scoring.setRetargetTolerance(settings.rpmRetargetFraction,settings.hoodRetargetTolerance,settings.compressionRetargetTolerance);
             if(settings.shotTable!=null)scoring.setFlightTiming(settings.exitLatencySec,settings.impactSettleSec);
+            if(Double.isFinite(settings.flywheelHoldRpm))scoring.setHoldRpm(settings.flywheelHoldRpm);
             robot=new RobotCoordinator(io,inventory,scoring,settings.pickupPlanningEnabled?new PieceTracker(settings.floor,settings.pieces):null,
                     settings.pickupPlanningEnabled?new PickupPlanner(settings.tipModel,settings.travel,settings.shots,settings.footprint):null,
                     new TurretController(settings.turretProfile),new DriveAssist(settings.yawAtFullPower,.3,.08),
@@ -74,9 +76,11 @@ public class BioBuzzTeleOp extends OpMode {
         input.burst=settings!=null&&settings.burst!=null&&gamepad2.right_bumper;
         input.preSpin=gamepad2.left_bumper;
         input.unwindAssist=gamepad1.left_bumper;
-        input.fieldX=deadband(gamepad1.left_stick_x);input.fieldY=deadband(-gamepad1.left_stick_y);
-        input.turn=deadband(gamepad1.right_stick_x);
-        if(robot!=null&&robot.driveRecovery())input.turn=-input.turn;
+        DriverStickMap.Command sticks=robot!=null&&robot.driveRecovery()
+                ?DriverStickMap.robotCentric(gamepad1.left_stick_x,gamepad1.left_stick_y,gamepad1.right_stick_x)
+                :DriverStickMap.fieldCentric(gamepad1.left_stick_x,gamepad1.left_stick_y,gamepad1.right_stick_x,
+                    settings==null?AllianceColor.UNKNOWN:settings.alliance);
+        input.fieldX=sticks.fieldX;input.fieldY=sticks.fieldY;input.turn=sticks.turn;
         boolean hold=gamepad1.x;
         boolean neutral=input.fieldX==0&&input.fieldY==0&&input.turn==0;
         input.resetFault &= neutral;
@@ -96,7 +100,6 @@ public class BioBuzzTeleOp extends OpMode {
         }
         return input;
     }
-    private static double deadband(double v){return Math.abs(v)<.08?0:v;}
     @Override public void loop() {
         long now=System.nanoTime();double dt=(now-lastNanos)*1e-9;lastNanos=now;
         intervals.record(dt);
@@ -164,7 +167,7 @@ public class BioBuzzTeleOp extends OpMode {
         telemetry.addData("RPM ready",robot.scoring.rpmReady);
         telemetry.addData("Inhibit",robot.reason);telemetry.addData("Pickup strategy",robot.plan==null?"none":robot.plan.getDecision());
         telemetry.addData("Pickup assist",settings.pickupMotion==null?"awaits measured motion settings":pickupReason);
-        telemetry.addLine("Hold RB enable; A ordinary shot (G2 RB + hold A for validated burst); G2 LB pre-spin; LT intake; B cancel; LB unwind assist; neutral BACK+START reset");
+        telemetry.addLine("Hold RB enable; stick right clockwise; stick up away from alliance wall; A ordinary shot (G2 RB + hold A for validated burst); G2 LB pre-spin; LT intake; B cancel; LB unwind assist; neutral BACK+START reset");
         telemetry.addLine("Hold X with neutral sticks: one confirmed pickup or scoring-position move; release/repress to replan.");
         telemetry.addLine("Disabled recovery G2: UP pollen, DOWN nectar in feed order; X undo; Y clear; BACK+START confirm inspected queue.");
         telemetry.addLine("Observer outcome for displayed last confirmed shot: G2 A hit / B miss; left stick click tip / right click no tip.");

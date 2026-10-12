@@ -2,6 +2,7 @@ package org.firstinspires.ftc.teamcode.robot;
 
 import java.util.*;
 import com.qualcomm.robotcore.hardware.*;
+import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.hardware.dfrobot.HuskyLens;
@@ -40,9 +41,20 @@ public final class RevRobotIO implements RobotIO {
     private HuskyLensWorker floor;
     private RevBasicDrive recoveryDrive;
     private boolean recovering;
+    private final HubBulkCache bulk;
     public RevRobotIO(HardwareMap map,RobotHardwareConfig.Settings settings,long epochNanos) {
         if(settings==null)throw new IllegalStateException("Hardware configuration undecided");
         settings.validate();this.settings=settings;
+        List<HubBulkCache.Hub> hubs=new ArrayList<HubBulkCache.Hub>();
+        for(LynxModule module:map.getAll(LynxModule.class)) {
+            final LynxModule hub=module;
+            hubs.add(new HubBulkCache.Hub() {
+                public void setManual() {hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);}
+                public void clear() {hub.clearBulkCache();}
+            });
+        }
+        if(hubs.isEmpty())throw new IllegalStateException("Lynx hubs required for MANUAL bulk caching");
+        bulk=new HubBulkCache(hubs);bulk.enableManual();
         try {
             if(PedroConstants.LOCALIZER!=PedroConstants.LocalizerKind.PINPOINT)throw new IllegalStateException("Competition adapter requires verified Pinpoint health");
             for(String name:new String[]{PedroConstants.FRONT_LEFT_MOTOR,PedroConstants.BACK_LEFT_MOTOR,
@@ -54,7 +66,7 @@ public final class RevRobotIO implements RobotIO {
                 for(int i=0;i<4;i++)if(!names[i].equals(settings.recoveryDrive.names[i])
                         ||settings.recoveryDrive.reversed[i]!=(directions[i]==DcMotorSimple.Direction.REVERSE))
                     throw new IllegalStateException("Recovery drive must match verified competition motor names/signs");
-                recoveryDrive=new RevBasicDrive(map,settings.recoveryDrive);
+                recoveryDrive=new RevBasicDrive(map,settings.recoveryDrive,bulk);
             }
             pinpoint=map.get(GoBildaPinpointDriver.class,PedroConstants.PINPOINT_NAME);
             turret=new RevTurretIO(map,settings.turretProfile);
@@ -94,6 +106,7 @@ public final class RevRobotIO implements RobotIO {
     }
     @Override public Snapshot read(double now,double dt) {
         if(recovering)throw new IllegalStateException("Recovery mode owns drive outputs");
+        bulk.beginLoop();
         lastReadNanos=System.nanoTime();
         if(fault)throw new IllegalStateException("Latched hardware fault; reinitialize OpMode");
         if(!TurretEncoderSample.validDt(dt)) {stop();healthy=false;}
@@ -185,6 +198,7 @@ public final class RevRobotIO implements RobotIO {
         recovering=true;return true;
     }
     @Override public Snapshot readDriveRecovery(double now,double dt) {
+        bulk.beginLoop();
         lastReadNanos=System.nanoTime();lastDt=dt;
         return new Snapshot(RobotState.invalid(now),now,Double.NaN,Double.NaN,Double.NaN,
                 new Health(recovering&&!fault&&recoveryDrive!=null&&recoveryDrive.healthy()&&TurretEncoderSample.validDt(dt),false,false,false,false),
