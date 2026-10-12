@@ -13,6 +13,7 @@ import org.firstinspires.ftc.teamcode.state.*;
 import org.firstinspires.ftc.teamcode.turret.*;
 import org.firstinspires.ftc.teamcode.vision.pieces.*;
 import org.firstinspires.ftc.teamcode.scoring.*;
+import org.firstinspires.ftc.teamcode.math.FilteredDerivative;
 
 /** Configured SDK implementation with final independent output/freshness interlocks. */
 public final class RevRobotIO implements RobotIO {
@@ -28,8 +29,10 @@ public final class RevRobotIO implements RobotIO {
     private DcMotor intake,transfer,feeder;
     private Servo hood,compression;
     private AnalogInput pitchSensor,gapSensor;
+    private AnalogVoltageHealth pitchHealth,gapHealth;
+    private final FilteredDerivative pitchRate=new FilteredDerivative(LauncherFeedback.DEFAULT_RATE_TAU_SEC);
+    private final FilteredDerivative gapRate=new FilteredDerivative(LauncherFeedback.DEFAULT_RATE_TAU_SEC);
     private LauncherFeedback launcher;
-    private double previousPitch=Double.NaN,previousGap=Double.NaN,previousLauncherSec=Double.NaN;
     private DigitalChannel entry,stage,exit;
     private BooleanDebouncer entryDebounce,stageDebounce,exitDebounce;
     private final List<DcMotor> motors=new ArrayList<DcMotor>();
@@ -68,6 +71,8 @@ public final class RevRobotIO implements RobotIO {
             feeder.setDirection(settings.feederReverse?DcMotorSimple.Direction.REVERSE:DcMotorSimple.Direction.FORWARD);
             hood=map.get(Servo.class,settings.hood);compression=map.get(Servo.class,settings.compression);
             pitchSensor=map.get(AnalogInput.class,settings.pitchSensor);gapSensor=map.get(AnalogInput.class,settings.gapSensor);
+            pitchHealth=AnalogVoltageHealth.railsAndRange(settings.pitchFeedback.minInput(),settings.pitchFeedback.maxInput());
+            gapHealth=AnalogVoltageHealth.railsAndRange(settings.gapFeedback.minInput(),settings.gapFeedback.maxInput());
             entry=sensor(map,settings.entrySensor);stage=sensor(map,settings.stageSensor);exit=sensor(map,settings.exitSensor);
             entryDebounce=new BooleanDebouncer(settings.sensorDebounceSec);
             stageDebounce=new BooleanDebouncer(settings.sensorDebounceSec);exitDebounce=new BooleanDebouncer(settings.sensorDebounceSec);
@@ -105,14 +110,18 @@ public final class RevRobotIO implements RobotIO {
         double pitch=Double.NaN,gap=Double.NaN;
         try {
             double pitchVoltage=pitchSensor.getVoltage(),gapVoltage=gapSensor.getVoltage();
-            pitch=pitchVoltage>=0&&pitchVoltage<=pitchSensor.getMaxVoltage()?settings.pitchFeedback.map(pitchVoltage):Double.NaN;
-            gap=gapVoltage>=0&&gapVoltage<=gapSensor.getMaxVoltage()?settings.gapFeedback.map(gapVoltage):Double.NaN;
-        }catch(RuntimeException sensorFailure) { /* Launcher health fails; no sensor value is invented. */ }
-        double elapsed=now-previousLauncherSec;
-        boolean derivative=Double.isFinite(elapsed)&&elapsed>0&&elapsed<=settings.launcherLimits.maxAge;
-        launcher=new LauncherFeedback(now,pitch,derivative?(pitch-previousPitch)/elapsed:Double.NaN,
-                gap,derivative?(gap-previousGap)/elapsed:Double.NaN);
-        previousPitch=pitch;previousGap=gap;previousLauncherSec=now;
+            if(pitchHealth.check(pitchVoltage,pitchSensor.getMaxVoltage()).isEmpty())
+                pitch=settings.pitchFeedback.map(pitchVoltage);
+            if(gapHealth.check(gapVoltage,gapSensor.getMaxVoltage()).isEmpty())
+                gap=settings.gapFeedback.map(gapVoltage);
+        }catch(RuntimeException sensorFailure) {
+            pitchHealth.reset();gapHealth.reset();pitchRate.reset();gapRate.reset();
+        }
+        double pitchVelocity=pitchRate.update(pitch,now);
+        double gapVelocity=gapRate.update(gap,now);
+        if(!Double.isFinite(pitch)) {pitchRate.reset();pitchVelocity=Double.NaN;}
+        if(!Double.isFinite(gap)) {gapRate.reset();gapVelocity=Double.NaN;}
+        launcher=new LauncherFeedback(now,pitch,pitchVelocity,gap,gapVelocity);
         double rpm=Double.NaN;
         try {rpm=flywheel.getVelocity()*60/settings.flywheelTicksPerRev;}catch(RuntimeException sensorFailure) { }
         history.add(robot);
@@ -133,7 +142,9 @@ public final class RevRobotIO implements RobotIO {
                 Double.isFinite(rpm)&&Double.isFinite(pitch)&&Double.isFinite(gap),inventoryHealthy);
         healthy=health.allHealthy();
         return new Snapshot(robot,now,turret.getAngleRad(),turret.getVelocityRadPerSec(),rpm,health,
-                entryBlocked,staged,exited,type,aim,floor==null?Collections.emptyList():floor.latest(),launcher);
+                entryBlocked,staged,exited,type,aim,
+                floor==null||!floor.healthy()?Collections.<org.firstinspires.ftc.teamcode.vision.pieces.PieceObservation>emptyList():floor.latest(),
+                launcher);
     }
     @Override public void write(Command command) {
         double age=(System.nanoTime()-lastReadNanos)*1e-9;

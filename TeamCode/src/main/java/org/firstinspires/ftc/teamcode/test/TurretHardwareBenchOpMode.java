@@ -22,8 +22,9 @@ public final class TurretHardwareBenchOpMode extends OpMode {
         telemetry.setMsTransmissionInterval(100);
         try { io = new RevTurretIO(hardwareMap); }
         catch (RuntimeException failure) { initFault = "HARDWARE INIT FAILED: " + failure.getMessage(); }
-        telemetry.addLine("SENSOR ONLY DEFAULT. B = latched emergency stop.");
-        telemetry.addData("Hardware", initFault.isEmpty() ? "mapped; motor zero" : initFault);
+        telemetry.addLine("SENSOR ONLY DEFAULT. Output locked until CR measure / checklist. B = latched emergency stop.");
+        telemetry.addData("Hardware", initFault.isEmpty() ? "mapped; CR PWM disabled / neutral if calibrated" : initFault);
+        telemetry.addLine("A CR servo has no brake: Stop/E-stop write calibrated neutral then disable PWM; backdrive is possible.");
     }
     @Override public void init_loop() { cycle(false); }
     @Override public void start() {
@@ -68,21 +69,29 @@ public final class TurretHardwareBenchOpMode extends OpMode {
                 input.center = gamepad1.x;
             }
             double demand = session.update(input, readiness, io.sample, dt);
-            if (!io.motorFault.isEmpty()) session.armed = false;
-            io.command(demand, started && session.armed, input.deadman, session.emergencyStop);
-            if (!io.motorFault.isEmpty()) session.armed = false;
+            if (input.reset && !session.emergencyStop) io.safety.clearFaults();
+            if (!io.motorFault.isEmpty() || io.safety.directionFault()) session.armed = false;
+            if (session.mode == TurretBenchSession.Mode.CR_DEADBAND) {
+                io.commandMeasurementPulse(session.measurePulseUs,
+                        started && session.armed && session.measureActive, input.deadman, session.emergencyStop);
+            } else if (session.mode == TurretBenchSession.Mode.SENSOR_ONLY) {
+                io.stop();
+            } else {
+                io.command(demand, started && session.armed, input.deadman, session.emergencyStop);
+            }
+            if (!io.motorFault.isEmpty() || io.safety.directionFault()) session.armed = false;
             boolean zeroEvent = stopping.update(io.appliedPower, io.sample,
                     (System.nanoTime() - epochNanos) * 1e-9, io.sampleAgeSec());
             zeroEvent |= immediateZeroEvent;
             if (zeroEvent || seconds - lastLogSec >= .1) {
                 RobotLog.ii("TurretBench", "t=%.4f mode=%s armed=%s valid=%s raw=%.5f "
-                                + "angle=%.5f vel=%.5f target=%.5f demand=%.5f output=%.5f "
+                                + "angle=%.5f vel=%.5f target=%.5f demand=%.5f output=%.5f pulse=%.1f pwm=%s "
                                 + "dt=%.5f sensorDt=%.5f fault=%s inhibit=%s zeroT=%.4f zeroAngle=%.5f extreme=%.5f "
                                 + "zeroSampleAge=%.5f stopDistance=%.5f incomplete=%s",
                         seconds, session.mode, session.armed, io.sample.valid, io.sample.raw,
                         io.getAngleRad(), io.getVelocityRadPerSec(), session.targetRad,
-                        session.rawPower, io.appliedPower, dt, io.acquisitionDtSec, io.sample.fault,
-                        session.reason.isEmpty() ? io.safety.reason : session.reason,
+                        session.rawPower, io.appliedPower, io.appliedPulseUs, io.pwmEnabled, dt, io.acquisitionDtSec,
+                        io.sample.fault, session.reason.isEmpty() ? io.safety.reason : session.reason,
                         stopping.zeroTimeSec, stopping.zeroAngleRad, stopping.extremeAngleRad,
                         stopping.zeroSampleAgeSec, stopping.distanceRad, stopping.incomplete);
                 lastLogSec = seconds;
@@ -103,12 +112,24 @@ public final class TurretHardwareBenchOpMode extends OpMode {
         telemetry.addData("Fault", "%s %s", io.sample.fault, io.motorFault);
         telemetry.addData("OUTPUT STATUS", session.reason.isEmpty()
                 ? (io.safety.reason.isEmpty() ? "ENABLED" : io.safety.reason) : "OUTPUT BLOCKED: " + session.reason);
+        telemetry.addData("CR PWM / pulse us", "%s / %.1f", io.pwmEnabled ? "ENABLED" : "DISABLED", io.appliedPulseUs);
+        telemetry.addData("Direction trip", io.safety.directionFault() ? "LATCHED" : "clear");
         telemetry.addData("Backend", TurretHardwareConfig.BACKEND);
         telemetry.addData("Raw / valid", "%.6f %s / %s", io.sample.raw, io.sample.units, io.sample.valid);
         telemetry.addData("Unoffset / required zero at forward rad", io.sample.unoffsetRad);
         telemetry.addData("Configured zero rad", TurretHardwareConfig.ENCODER_ZERO_OFFSET_RAD);
         telemetry.addData("Actual angle deg / rad", "%.3f / %.6f", Math.toDegrees(io.getAngleRad()), io.getAngleRad());
         telemetry.addData("Actual velocity deg/s", Math.toDegrees(io.getVelocityRadPerSec()));
+        if (session.mode == TurretBenchSession.Mode.CR_DEADBAND) {
+            telemetry.addData("CR measure pulse us", session.measurePulseUs);
+            telemetry.addData("Suggested deadband low / neutral / high us", "%.1f / %.1f / %.1f",
+                    session.suggestedDeadbandLowUs, session.suggestedNeutralUs, session.suggestedDeadbandHighUs);
+            telemetry.addLine(session.crPaste);
+            telemetry.addLine("Hold RB, DPAD L/R nudge pulse. Robot must be CR_MEASURE_CLEARED. Output impossible in SENSOR_ONLY.");
+        }
+        String signRefusal = TurretHardwareConfig.signTestRefusal();
+        if (!signRefusal.isEmpty()) telemetry.addData("Sign test", signRefusal);
+        else telemetry.addData("Sign test power", TurretHardwareConfig.effectiveSignTestPower());
         telemetry.addData("Target deg / velocity rad/s", "%.2f / 0", Math.toDegrees(session.targetRad));
         telemetry.addData("Error deg", Math.toDegrees(session.errorRad));
         telemetry.addData("Raw / post-safety output", "%.5f / %.5f", session.rawPower, io.appliedPower);
@@ -119,8 +140,8 @@ public final class TurretHardwareBenchOpMode extends OpMode {
                 Math.toDegrees(TurretConstants.OPERATING_MIN_RAD), Math.toDegrees(TurretConstants.OPERATING_MAX_RAD));
         telemetry.addData("Bench deg / cap (UNCONFIRMED)", "%.1f .. %.1f / %.3f",
                 Math.toDegrees(io.safety.minRad), Math.toDegrees(io.safety.maxRad), io.safety.cap);
-        telemetry.addData("Checklist open / closed / sweep", "%s / %s / %s",
-                readiness.openLoop, readiness.closedLoop, readiness.sweep);
+        telemetry.addData("Checklist measure / open / closed / sweep", "%s / %s / %s / %s",
+                readiness.crMeasure, readiness.openLoop, readiness.closedLoop, readiness.sweep);
         telemetry.addLine("Unwind active=false; branch=NONE (direct bench target); chassis omega=0");
         telemetry.addData("Loop dt s", dt);
         telemetry.addData("Acquisition dt s", io.acquisitionDtSec);
@@ -135,9 +156,11 @@ public final class TurretHardwareBenchOpMode extends OpMode {
         telemetry.addData("Post-zero extreme / distance deg / incomplete", "%.3f / %.3f / %s",
                 Math.toDegrees(stopping.extremeAngleRad), Math.toDegrees(stopping.distanceRad), stopping.incomplete);
         telemetry.addData("Zero angle sample age s (measurement uncertainty)", stopping.zeroSampleAgeSec);
-        telemetry.addLine("LB next mode (RB released); A arm (RB/DPAD released); hold RB to power");
-        telemetry.addLine("DPAD L/R sign or 10° step; U/D ±20° or bench endpoint; X target 0°");
-        telemetry.addLine("B E-STOP; release RB/DPAD, BACK+START reset to SENSOR ONLY, then reselect + A");
+        telemetry.addLine("LB next mode (RB released): SENSOR_ONLY, CR_DEADBAND, SIGN_TEST, SMALL_STEPS, SWEEP");
+        telemetry.addLine("A arm (RB/DPAD released); hold RB to power. SENSOR_ONLY cannot command the CR servo.");
+        telemetry.addLine("DPAD L/R CR pulse or sign or 10° step; U/D ±20° or bench endpoint; X target 0°");
+        telemetry.addLine("B E-STOP (neutral + PWM disable); release RB/DPAD, BACK+START reset, then reselect + A");
+        telemetry.addLine("CR stop caveat: PWM disable allows backdrive; there is no brake.");
     }
     @Override public void stop() { if (io != null) io.stop(); }
 }

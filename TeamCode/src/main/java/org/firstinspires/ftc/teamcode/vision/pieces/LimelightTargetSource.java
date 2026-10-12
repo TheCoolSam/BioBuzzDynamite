@@ -38,8 +38,12 @@ public final class LimelightTargetSource {
             if(!allowed||target.getTargetPoseCameraSpace()==null)continue;
             Position position=target.getTargetPoseCameraSpace().getPosition().toUnit(DistanceUnit.INCH);
             YawPitchRollAngles orientation=target.getTargetPoseCameraSpace().getOrientation();
-            double[] tagRotation=CellTargetGeometry.rotation(orientation.getYaw(AngleUnit.RADIANS),
-                    orientation.getPitch(AngleUnit.RADIANS),orientation.getRoll(AngleUnit.RADIANS));
+            // SDK Pose3D stores YawPitchRollAngles(yaw=a[5], pitch=a[4], roll=a[3]) while
+            // Limelight targetpose_cameraspace is [tx, ty, tz, pitch, yaw, roll].
+            double[] pose6=new double[]{position.x,position.y,position.z,
+                    orientation.getRoll(AngleUnit.DEGREES),orientation.getPitch(AngleUnit.DEGREES),
+                    orientation.getYaw(AngleUnit.DEGREES)};
+            double[] tagRotation=LimelightCameraPose.rotationFromTargetPoseCameraSpace(pose6);
             cached=transform.project(position.x,position.y,position.z,tagRotation,exposure,target.getFiducialId(),classifier.classify(target),history,turret,generation);
             if(cached!=null)return cached;
         }

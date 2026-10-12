@@ -30,6 +30,10 @@ public final class TurretBenchScenarios {
         timingAndControllerReset();
         operator();
         stopping();
+        analogHealth();
+        directionTrip();
+        crCommands();
+        signTestDeadband();
         System.out.println("TURRET BENCH CHECKS PASSED (" + checks + ")");
     }
     private static TurretOutputSafety gate() {
@@ -129,7 +133,28 @@ public final class TurretBenchScenarios {
         session.update(in, ready, sample, .02);
         in.nextMode = false; in.arm = true;
         session.update(in, ready, sample, .02);
-        check(!session.armed, "checklist blocks sign mode");
+        check(session.mode == TurretBenchSession.Mode.CR_DEADBAND && !session.armed,
+                "checklist blocks CR measure without window");
+        ready.crMeasure = true;
+        in.arm = false; session.update(in, ready, sample, .02);
+        in.arm = true; session.update(in, ready, sample, .02);
+        check(session.armed, "CR measure arms after checklist");
+        in.arm = false; in.deadman = true;
+        session.update(in, ready, sample, .02);
+        check(session.rawPower == 0 && !session.measureActive,
+                "CR measure cannot pulse until the configured window is finite");
+        in.stop = true; session.update(in, ready, sample, .02);
+        check(session.emergencyStop && session.mode == TurretBenchSession.Mode.SENSOR_ONLY
+                && !session.measureActive, "E-stop returns to sensor-only with no pulse");
+        in.stop = false; in.reset = true; in.deadman = false; in.right = false;
+        session.update(in, ready, sample, .02);
+        in.reset = false; in.nextMode = true; session.update(in, ready, sample, .02);
+        in.nextMode = false; session.update(in, ready, sample, .02);
+        in.nextMode = true; session.update(in, ready, sample, .02);
+        in.nextMode = false; in.arm = true;
+        session.update(in, ready, sample, .02);
+        check(session.mode == TurretBenchSession.Mode.SIGN_TEST && !session.armed,
+                "checklist blocks sign mode");
         ready.openLoop = true;
         in.arm = false; session.update(in, ready, sample, .02);
         in.arm = true; session.update(in, ready, sample, .02);
@@ -158,7 +183,7 @@ public final class TurretBenchScenarios {
                 "reset cannot simultaneously select and arm a powered mode");
         chord.reset = chord.arm = chord.nextMode = false; overlap.update(chord, ready, sample, .02);
         chord.arm = chord.nextMode = true; overlap.update(chord, ready, sample, .02);
-        check(overlap.mode == TurretBenchSession.Mode.SIGN_TEST && !overlap.armed,
+        check(overlap.mode == TurretBenchSession.Mode.CR_DEADBAND && !overlap.armed,
                 "mode change requires subsequent separate arm edge");
         session.mode = TurretBenchSession.Mode.SMALL_STEPS;
         in = new TurretBenchSession.Input(); in.arm = true;
@@ -196,6 +221,81 @@ public final class TurretBenchScenarios {
         m.update(-.03, valid(-10), 6); m.update(0, valid(-12), 7);
         m.update(0, valid(-16), 8);
         near(m.distanceRad, Math.toRadians(4), "negative stopping distance");
+    }
+    private static void analogHealth() {
+        AnalogVoltageHealth unconfigured = AnalogVoltageHealth.unconfigured();
+        check(AnalogAbsoluteConversion.convert(.1, 3.3, 0.05, 3.2, unconfigured, true)
+                .fault.equals("ANALOG VALID BAND UNCONFIGURED"), "valid band required");
+        AnalogVoltageHealth band = new AnalogVoltageHealth(.2, 3.0, Double.NaN, 0);
+        check(AnalogAbsoluteConversion.convert(0, 3.3, .05, 3.2, band, true)
+                .fault.equals("ANALOG DISCONNECT / RAIL"), "0 V rail is disconnect");
+        check(AnalogAbsoluteConversion.convert(3.3, 3.3, .05, 3.2, band, true)
+                .fault.equals("ANALOG DISCONNECT / RAIL"), "max V rail is disconnect");
+        check(AnalogAbsoluteConversion.convert(.1, 3.3, .05, 3.2, band, true)
+                .fault.equals("ANALOG OUTSIDE VALID BAND"), "below band rejected");
+        AbsoluteTurretSensor.Reading ok = AnalogAbsoluteConversion.convert(1.1, 3.3, .2, 3.0, band, true);
+        check(ok.fault.isEmpty() && Math.abs(ok.turns - .9 / 2.8) < 1e-9, "in-band voltage converts");
+        check(AnalogAbsoluteConversion.convert(1.1, 3.3, .2, 3.0, band, false)
+                .fault.equals("ANALOG WIRING / TRANSFER NOT CONFIRMED"), "raw survives unconfirmed wiring");
+        AnalogVoltageHealth stuck = new AnalogVoltageHealth(.2, 3.0, 0, 3);
+        check(stuck.check(1.0, 3.3).isEmpty(), "first live sample");
+        check(stuck.check(1.0, 3.3).isEmpty(), "second identical sample held");
+        check(stuck.check(1.0, 3.3).equals("ANALOG STUCK / ZERO NOISE"), "frozen analog trips");
+        AnalogVoltageHealth launcher = AnalogVoltageHealth.railsAndRange(.2, .6);
+        check(launcher.check(0, 3.3).equals("ANALOG DISCONNECT / RAIL"), "pitch/gap share rail rejection");
+        check(launcher.check(.4, 3.3).isEmpty(), "pitch/gap in calibrated knots");
+    }
+    private static void directionTrip() {
+        TurretOutputSafety trip = new TurretOutputSafety(-2, 2, -1.5, 1.5, -1, 1, .2, .05, .04, .08, Math.toRadians(2));
+        near(trip.apply(.1, 0, .5, true, .02, true, true, false), .1, "matching velocity allowed");
+        double last = 0;
+        for (int i = 0; i < 3; i++) last = trip.apply(.1, 0, -.5, true, .02, true, true, false);
+        near(last, 0, "opposite velocity latches");
+        check(trip.directionFault() && trip.reason.equals("WRONG DIRECTION / STALL TRIP"), "wrong-direction reason");
+        near(trip.apply(.1, 0, .5, true, .02, true, true, false), 0, "latched trip zeros later matching motion");
+        trip.clearFaults();
+        near(trip.apply(.1, 0, .5, true, .02, true, true, false), .1, "reset chord re-enables");
+        TurretOutputSafety stall = new TurretOutputSafety(-2, 2, -1.5, 1.5, -1, 1, .2, .05, .04, .06, Math.toRadians(2));
+        for (int i = 0; i < 2; i++) near(stall.apply(.1, 0, 0, true, .02, true, true, false), .1, "stall window not yet");
+        near(stall.apply(.1, 0, 0, true, .02, true, true, false), 0, "zero velocity beyond stall window trips");
+        check(stall.directionFault(), "stall latched");
+        near(gate().apply(.1, 0, Double.NaN, true, .02, true, true, false), .1, "missing velocity does not trip fixtures");
+    }
+    private static void crCommands() {
+        check(!TurretCrCommand.stop(null).pwmEnabled && !Double.isFinite(TurretCrCommand.stop(null).sdkPower),
+                "uncalibrated stop disables PWM and does not write SDK zero");
+        AxonCrCalibration cr = new AxonCrCalibration(500, 1520, 2500, 20000, 1);
+        TurretCrCommand stopped = TurretCrCommand.stop(cr);
+        check(!stopped.pwmEnabled, "calibrated stop disables PWM");
+        near(stopped.pulseUs, 1520, "calibrated stop uses measured neutral");
+        near(stopped.sdkPower, cr.sdkPower(0), "calibrated stop writes verified neutral first");
+        TurretCrCommand drive = TurretCrCommand.drive(cr, .2);
+        check(drive.pwmEnabled && drive.writesOutput(), "drive enables PWM");
+        TurretCrCommand estop = TurretCrCommand.drive(cr, 0);
+        check(!estop.pwmEnabled && estop.pulseUs == 1520, "zero demand is neutral then PWM disable");
+        TurretCrCommand blocked = TurretCrCommand.measure(1500, Double.NaN, Double.NaN, Double.NaN);
+        check(!blocked.writesOutput(), "measure window NaN cannot command a pulse");
+        TurretCrCommand pulse = TurretCrCommand.measure(1510, 500, 2500, 20000);
+        check(pulse.pwmEnabled && pulse.pulseUs == 1510 && !Double.isFinite(pulse.sdkPower),
+                "measure mode writes the nudged pulse");
+        TurretBenchSession session = new TurretBenchSession();
+        check(session.mode == TurretBenchSession.Mode.SENSOR_ONLY && session.update(new TurretBenchSession.Input(),
+                new TurretBenchSession.Readiness(), valid(0), .02) == 0, "sensor-only output is zero");
+    }
+    private static void signTestDeadband() {
+        AxonCrCalibration noBand = new AxonCrCalibration(500, 1520, 2500, 20000, 1);
+        check(!Double.isFinite(noBand.validatedSignTestPower(.03, .15)), "unmeasured deadband refuses sign test");
+        AxonCrCalibration wide = new AxonCrCalibration(500, 1500, 1520, 1550, 2500, 20000, 1);
+        check(wide.pulseUs(.03) > 1500 && wide.pulseUs(.03) < 1550, "0.03 sits inside this deadband");
+        near(wide.demandForPulse(1520), 0, "neutral maps to zero demand");
+        double derived = wide.validatedSignTestPower(.03, .15);
+        check(Double.isFinite(derived) && derived > .03, "sign test power is raised out of the deadband");
+        check(wide.pulseUs(derived) > 1550 || wide.pulseUs(derived) < 1500, "derived pulse is outside deadband");
+        check(!Double.isFinite(wide.validatedSignTestPower(.03, .03)), "refuse when derived power exceeds bench cap");
+        AxonCrCalibration reverse = new AxonCrCalibration(500, 1480, 1520, 1560, 2500, 20000, -1);
+        double reversePower = reverse.validatedSignTestPower(.03, .15);
+        check(Double.isFinite(reversePower) && reverse.pulseUs(reversePower) != reverse.neutralUs,
+                "reverse sign still escapes deadband");
     }
     private static void near(double actual, double expected, String label) {
         check(Double.isFinite(actual) && Math.abs(actual - expected) < 1e-9, label + ": " + actual);

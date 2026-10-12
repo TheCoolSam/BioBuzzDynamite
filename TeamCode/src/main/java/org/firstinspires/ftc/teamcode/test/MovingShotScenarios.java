@@ -103,6 +103,24 @@ public final class MovingShotScenarios {
         check(!c.update(state(.6,16,0,0,25,0,0,1),.6),"clock rollback rejected");
         c.reset();c.update(state(0,0,0,0,0,0,0,0),0);
         check(!c.update(state(.02,0,0,.5,0,0,0,0),.02),"yaw/omega disagreement rejected");
+        MotionConfidence noisy=new MotionConfidence(limits());
+        check(!noisy.update(state(0,0,0,0,10,0,0,0),0),"filter warmup");
+        boolean ready=false;
+        for(int i=1;i<=12;i++) {
+            double t=i*.02;
+            double jitter=(i%2==0?1:-1)*.4;
+            ready=noisy.update(state(t,t*10,0,0,10+jitter,0,0,0),t);
+        }
+        check(ready,"filtered velocity jitter does not block readiness");
+        check(Math.hypot(noisy.ax,noisy.ay)<limits().maxAcceleration,"filtered acceleration stays inside bound");
+        org.firstinspires.ftc.teamcode.math.FilteredDerivative d=new org.firstinspires.ftc.teamcode.math.FilteredDerivative(.05);
+        check(Double.isNaN(d.update(0,0)),"first sample has no invented rate");
+        double raw=d.update(1,.02);
+        check(Double.isFinite(raw)&&raw>0,"second sample produces a rate");
+        org.firstinspires.ftc.teamcode.math.FilteredDerivative pitch=new org.firstinspires.ftc.teamcode.math.FilteredDerivative(org.firstinspires.ftc.teamcode.scoring.LauncherFeedback.DEFAULT_RATE_TAU_SEC);
+        pitch.update(.4,0);
+        double rate=pitch.update(.401,.02);
+        check(Math.abs(rate)<.2,"launcher pitch rate is smoothed");
     }
     private static PieceInventory inventory(BallType... types) {
         PieceInventory i=new PieceInventory(4);i.reconcile(Arrays.asList(types));return i;
