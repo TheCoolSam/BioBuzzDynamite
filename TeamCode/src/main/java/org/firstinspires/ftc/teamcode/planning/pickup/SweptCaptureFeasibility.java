@@ -32,6 +32,23 @@ public final class SweptCaptureFeasibility implements CaptureFeasibilityModel {
         }
         return true;
     }
+    /** Fixed-heading departure only: measured rectangle at the walls, full circle at obstacles.
+     * The caller must suppress yaw and recheck the actual heading on every update. */
+    public boolean departureSafe(double x0,double y0,double x1,double y1,double heading,
+            double halfForward,double halfLeft) {
+        if(!Double.isFinite(heading)||!Double.isFinite(halfForward)||!Double.isFinite(halfLeft)
+                ||halfForward<=0||halfLeft<=0||Math.hypot(halfForward,halfLeft)>radius+1e-8)return false;
+        double hx=Math.abs(Math.cos(heading))*halfForward+Math.abs(Math.sin(heading))*halfLeft;
+        double hy=Math.abs(Math.sin(heading))*halfForward+Math.abs(Math.cos(heading))*halfLeft;
+        for(double x:new double[]{x0,x1})if(!Double.isFinite(x)||x<hx-1e-8||x>width-hx+1e-8)return false;
+        for(double y:new double[]{y0,y1})if(!Double.isFinite(y)||y<hy-1e-8||y>height-hy+1e-8)return false;
+        for(double[] box:obstacles) {
+            double[] range={0,1};
+            if(slab(x0,x1-x0,box[0]-radius,box[2]+radius,range)
+                    &&slab(y0,y1-y0,box[1]-radius,box[3]+radius,range))return false;
+        }
+        return true;
+    }
     private boolean inside(double x,double y) {
         return Double.isFinite(x) && Double.isFinite(y) && x>=radius && x<=width-radius
                 && y>=radius && y<=height-radius;

@@ -8,7 +8,6 @@ import org.firstinspires.ftc.teamcode.scoring.ScoringController;
 @Autonomous(name="BIOBUZZ Fixed Route",group="Competition")
 public final class BioBuzzAutonomous extends BioBuzzTeleOp {
     private FixedRouteAuto auto;
-    private boolean shootPrevious;
     private int previousCount;
     private double startSec;
     private boolean cancelled;
@@ -29,16 +28,15 @@ public final class BioBuzzAutonomous extends BioBuzzTeleOp {
         if(cancelled){autoReason="DRIVER CANCELLED";input.cancel=true;return input;}
         if(auto==null||robot.snapshot==null)return input;
         double now=seconds(System.nanoTime());
-        boolean exit=robot.inventory.controlledCount()<previousCount;
         boolean pickup=robot.inventory.controlledCount()>previousCount;
         previousCount=robot.inventory.controlledCount();
-        FixedRouteAuto.Command command=auto.update(robot.snapshot.robot,now,exit,pickup,robot.scoring.state()==ScoringController.State.FAULT);
+        FixedRouteAuto.Command command=auto.update(robot.snapshot.robot,now,robot.scoring.completedRequestId(),pickup,robot.scoring.state()==ScoringController.State.FAULT);
         autoReason=command.action+": "+command.reason;
         input.intake=auto.intakeRequested();
         input.enabled=command.action!=FixedRouteAuto.Action.DONE&&command.action!=FixedRouteAuto.Action.FAULT;
         input.fieldX=command.xPower;input.fieldY=command.yPower;input.turn=command.turnPower;
-        boolean shoot=command.action==FixedRouteAuto.Action.SHOOT;
-        input.shoot=shoot&&!shootPrevious;shootPrevious=shoot;
+        input.shotRequestId=auto.shotRequestId();
+        input.mechanismsInhibited=auto.departing();
         input.cancelShot=command.action==FixedRouteAuto.Action.PARK;
         input.cancel=now-startSec>=30;
         if(now-startSec>=30)input.enabled=false;

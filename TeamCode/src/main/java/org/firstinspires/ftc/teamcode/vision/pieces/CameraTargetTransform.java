@@ -6,6 +6,8 @@ import org.firstinspires.ftc.teamcode.scoring.HiveTracker;
 /** Explicit measured optical-axis rotation, camera translation, and yaw-pivot offsets. */
 public final class CameraTargetTransform {
     private final double[] rotation;
+    private double cameraHeight=Double.NaN;
+    private CellTargetGeometry cells;
     private final double pivotForward,pivotLeft,cameraForward,cameraLeft,minRange,maxRange;
     public double pivotForward() {return pivotForward;}
     public double pivotLeft() {return pivotLeft;}
@@ -26,9 +28,27 @@ public final class CameraTargetTransform {
         if(minRange<=0||maxRange<=minRange)throw new IllegalArgumentException("Measured useful range required");
         this.pivotForward=pivotForward;this.pivotLeft=pivotLeft;this.cameraForward=cameraForward;this.cameraLeft=cameraLeft;this.minRange=minRange;this.maxRange=maxRange;
     }
+    public CameraTargetTransform(double[] opticalToTurret,double pivotForward,double pivotLeft,
+            double cameraForward,double cameraLeft,double cameraHeight,double minRange,double maxRange,CellTargetGeometry cells) {
+        this(opticalToTurret,pivotForward,pivotLeft,cameraForward,cameraLeft,minRange,maxRange);
+        if(!Double.isFinite(cameraHeight)||cells==null)throw new IllegalArgumentException("Camera height and cell geometry required");
+        this.cameraHeight=cameraHeight;this.cells=cells;
+    }
+    public boolean hasCellGeometry() {return cells!=null&&Double.isFinite(cameraHeight);}
     public TargetEstimate project(double cameraX,double cameraY,double cameraZ,double exposureSec,
             int id,HiveTracker.State hive,RobotStateHistory history,TurretPoseHistory turret,long generation) {
+        return project(cameraX,cameraY,cameraZ,null,exposureSec,id,hive,history,turret,generation);
+    }
+    public TargetEstimate project(double cameraX,double cameraY,double cameraZ,double[] tagToCamera,double exposureSec,
+            int id,HiveTracker.State hive,RobotStateHistory history,TurretPoseHistory turret,long generation) {
         if(history==null||turret==null)return null;
+        double clearance=Double.NaN;
+        if(cells!=null) {
+            double[] offset=cells.offset(id,hive,tagToCamera);if(offset==null)return null;
+            clearance=cells.point(id,hive).clearanceInches;
+            cameraX+=offset[0];cameraY+=offset[1];cameraZ+=offset[2];
+        }
+        double height=cameraHeight+rotation[6]*cameraX+rotation[7]*cameraY+rotation[8]*cameraZ;
         double forward=rotation[0]*cameraX+rotation[1]*cameraY+rotation[2]*cameraZ;
         double left=rotation[3]*cameraX+rotation[4]*cameraY+rotation[5]*cameraZ;
         double distance=Math.sqrt(cameraX*cameraX+cameraY*cameraY+cameraZ*cameraZ);
@@ -43,6 +63,6 @@ public final class CameraTargetTransform {
         double chassisY=pivotLeft+Math.sin(angle)*fx+Math.cos(angle)*fy;
         return new TargetEstimate(robot.getFieldX()+Math.cos(robot.getHeadingRad())*chassisX-Math.sin(robot.getHeadingRad())*chassisY,
                 robot.getFieldY()+Math.sin(robot.getHeadingRad())*chassisX+Math.cos(robot.getHeadingRad())*chassisY,
-                exposureSec,id,generation,hive);
+                height,exposureSec,id,generation,hive,cells!=null,clearance);
     }
 }

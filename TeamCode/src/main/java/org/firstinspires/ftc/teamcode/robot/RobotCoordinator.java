@@ -11,7 +11,8 @@ import org.firstinspires.ftc.teamcode.math.AngleUtil;
 /** One snapshot, one actuator owner, coherent resets, and bounded lower-cadence planning. */
 public final class RobotCoordinator {
     public static final class Input {
-        public boolean enabled,intake,shoot,burst,cancel,cancelShot,resetFault,unwindAssist;
+        public long shotRequestId;
+        public boolean enabled,intake,shoot,burst,preSpin,cancel,cancelShot,resetFault,unwindAssist,recoverDrive,mechanismsInhibited;
         public double fieldX,fieldY,turn;
         public BallType expectedPickupType;
     }
@@ -26,8 +27,20 @@ public final class RobotCoordinator {
     private final HiveTracker hive;
     private final double aimTolerance,maxMotion,maxTurretRate;
     private double intakePower=.25;
+    private boolean feedStagesIsolated;
+    public ShotJournal journal;
+    public double readSeconds,planSeconds,writeSeconds,cycleSeconds;
+    private TipModel shotTipModel;
+    public double shotTipProbability=Double.NaN;
+    public void setShotLogging(String revision) {journal=new ShotJournal(revision);}
+    public void setShotLogging(String revision,String runId) {journal=new ShotJournal(revision,runId);}
+    public void setShotTipModel(TipModel model) {shotTipModel=model;}
+    public void setFeedStagesIsolated(boolean measuredIsolation) {feedStagesIsolated=measuredIsolation;}
     private double pivotForward,pivotLeft;
     private MotionShotSolver movingShots;
+    private MotionShotSolver.StationarySettings stationaryShots;
+    private double stationarySince=Double.NaN;
+    public void setStationaryShots(MotionShotSolver.StationarySettings settings) {stationaryShots=settings;}
     private MotionConfidence motionConfidence;
     private double committedReleaseSec=Double.NaN;
     private double previousTurretAngle=Double.NaN,previousTurretRate,previousTurretSec;
@@ -41,13 +54,15 @@ public final class RobotCoordinator {
     private long generation=Long.MIN_VALUE,inventoryRevision;
     private double lastPlan=Double.NEGATIVE_INFINITY;
     private boolean entryPrevious,initialized,fault;
+    private boolean driveRecovery;
+    public boolean driveRecovery() {return driveRecovery;}
     public PickupPlan plan;
     public RobotIO.Snapshot snapshot;
     public String reason="INITIALIZING";
     public RobotCoordinator(RobotIO io,PieceInventory inventory,ScoringController scoring,PieceTracker tracker,
             PickupPlanner planner,TurretController turret,DriveAssist assist,HiveTracker hive,
             double aimTolerance,double maxMotion,double maxTurretRate) {
-        if(io==null||inventory==null||scoring==null||tracker==null||planner==null||turret==null||assist==null||hive==null)throw new IllegalArgumentException("Configured subsystems required");
+        if(io==null||inventory==null||scoring==null||(tracker==null)!=(planner==null)||turret==null||assist==null||hive==null)throw new IllegalArgumentException("Configured subsystems required");
         for(double n:new double[]{aimTolerance,maxMotion,maxTurretRate})if(!Double.isFinite(n)||n<=0)throw new IllegalArgumentException("Measured firing tolerances required");
         this.io=io;this.inventory=inventory;this.scoring=scoring;this.tracker=tracker;this.planner=planner;
         this.turret=turret;this.assist=assist;this.hive=hive;this.aimTolerance=aimTolerance;this.maxMotion=maxMotion;this.maxTurretRate=maxTurretRate;
@@ -78,18 +93,40 @@ public final class RobotCoordinator {
                 r.getAcquisitionTimestampSec(),r.isDeviceHealthy(),r.getResetGeneration());
     }
     public void localizationReset(double now,long generation) {
-        io.stop();history.clear();tracker.reset(now,generation);turret.reset();hive.reset();plan=null;
+        io.stop();history.clear();if(tracker!=null)tracker.reset(now,generation);turret.reset();hive.reset();plan=null;
+        stationarySince=Double.NaN;
         this.generation=generation;lastPlan=Double.NEGATIVE_INFINITY;scoring.cancel();targetId=Integer.MIN_VALUE;hiveFrameFloor=now;
         if(motionConfidence!=null)motionConfidence.reset();committedReleaseSec=Double.NaN;shotSolution=null;
         previousTurretAngle=Double.NaN;
     }
-    public void consumedTrack(int id,double now) {tracker.consume(id,now);plan=null;}
+    public void consumedTrack(int id,double now) {if(tracker!=null)tracker.consume(id,now);plan=null;}
     public void cycle(Input input,double now,double dt) {
+        long cycleStarted=System.nanoTime();readSeconds=planSeconds=writeSeconds=0;
         // Cancelling/releasing enable stops before any SDK reads can delay the write.
         if(!input.enabled||input.cancel)io.stop();
         RobotIO.Command command=new RobotIO.Command();
         try {
-            snapshot=io.read(now,dt);
+            if(input.recoverDrive&&!input.enabled&&!input.shoot&&!input.intake&&!input.preSpin
+                    &&input.shotRequestId==0&&input.fieldX==0&&input.fieldY==0&&input.turn==0
+                    &&(fault||snapshot!=null&&!snapshot.healthy)) {
+                io.stop();scoring.cancel();plan=null;
+                if(io.enterDriveRecovery()) {driveRecovery=true;history.clear();hive.reset();turret.reset();}
+                else reason="DRIVE RECOVERY REFUSED: MEASURED DRIVE / CONFIRMED STOP REQUIRED";
+            }
+            if(driveRecovery) {
+                long readStarted=System.nanoTime();
+                try {snapshot=io.readDriveRecovery(now,dt);}finally {readSeconds=(System.nanoTime()-readStarted)*1e-9;}
+                boolean fresh=snapshot!=null&&snapshot.health.drive&&Double.isFinite(now)&&Double.isFinite(snapshot.acquiredSec)
+                        &&now>=snapshot.acquiredSec&&now-snapshot.acquiredSec<=.2&&TurretEncoderSample.validDt(dt);
+                command.enabled=fresh&&input.enabled&&!input.cancel&&BasicDrive.powers(input.fieldX,input.fieldY,input.turn,1)!=null;
+                if(command.enabled) {command.fieldX=input.fieldX;command.fieldY=input.fieldY;command.turn=input.turn;command.acquiredSec=now;}
+                reason=command.reason="LATCHED ROBOT-CENTRIC DRIVE ONLY / MECHANISMS INHIBITED";
+                long writeStarted=System.nanoTime();
+                try {io.writeDriveRecovery(command,dt);}finally {writeSeconds=(System.nanoTime()-writeStarted)*1e-9;}return;
+            }
+            long readStarted=System.nanoTime();
+            try {snapshot=io.read(now,dt);}finally {readSeconds=(System.nanoTime()-readStarted)*1e-9;}
+            if(snapshot!=null&&!snapshot.health.inventory)inventory.markUncertain();
             if(snapshot==null||snapshot.robot==null||!snapshot.robot.isFresh(now,.2)||!snapshot.healthy
                     ||!TurretEncoderSample.validDt(dt)||!Double.isFinite(snapshot.acquiredSec)
                     ||now<snapshot.acquiredSec||now-snapshot.acquiredSec>.2) {
@@ -116,13 +153,15 @@ public final class RobotCoordinator {
                 }
                 // Intake confirmation clears the strategic commitment even if counts later match.
                 plan=null;
-                if(tracker.size()>0) { tracker.reset(now,generation); }
+                if(tracker!=null&&tracker.size()>0) { tracker.reset(now,generation); }
             }
-            PieceTrackingResult tracked=tracker.update(snapshot.pieces,history,now);
+            PieceTrackingResult tracked=tracker==null?null:tracker.update(snapshot.pieces,history,now);
             if(inventoryRevision!=inventory.revision()) {plan=null;inventoryRevision=inventory.revision();}
             if(input.cancel)plan=null;
-            if(now-lastPlan>=.1) {
-                plan=planner.plan(snapshot.robot,inventory.load(),tracked.getPieces(),now,plan);lastPlan=now;
+            if(planner!=null&&now-lastPlan>=.1) {
+                long planStarted=System.nanoTime();
+                try {plan=planner.plan(snapshot.robot,inventory.load(),tracked.getPieces(),now,plan);lastPlan=now;}
+                finally {planSeconds=(System.nanoTime()-planStarted)*1e-9;}
             }
             boolean targetFresh=snapshot.target!=null&&snapshot.target.fresh(now,.2,generation);
             if(targetFresh&&targetId!=snapshot.target.targetId) {hive.reset();turret.reset();targetId=snapshot.target.targetId;}
@@ -134,6 +173,16 @@ public final class RobotCoordinator {
             shotSolution=null;
             shotMissBoundInches=Double.NaN;
             double aimX=targetFresh?snapshot.target.x:Double.NaN,aimY=targetFresh?snapshot.target.y:Double.NaN;
+            if(movingShots==null&&stationaryShots!=null&&targetFresh) {
+                shotSolution=MotionShotSolver.stationary(scoring.selector(),inventory.first(),snapshot.robot,now,
+                        pivotForward,pivotLeft,snapshot.turretAngle,snapshot.turretVelocity,
+                        snapshot.target.x,snapshot.target.y,snapshot.target.z,maxMotion,maxTurretRate,stationaryShots);
+                if(shotSolution!=null) {
+                    aimX=pivot.getFieldX()+shotSolution.equivalentRange*Math.cos(shotSolution.bearing);
+                    aimY=pivot.getFieldY()+shotSolution.equivalentRange*Math.sin(shotSolution.bearing);
+                    shotMissBoundInches=shotSolution.errorBoundInches;
+                }
+            }
             if(movingShots!=null) {
                 boolean trusted=motionConfidence.update(snapshot.robot,now);
                 double turretDt=snapshot.acquiredSec-previousTurretSec;
@@ -147,7 +196,7 @@ public final class RobotCoordinator {
                         :now+movingShots.settings.releaseDelaySec;
                 if(targetFresh)shotSolution=movingShots.solve(scoring.selector(),inventory.first(),snapshot.robot,now,releaseSec,
                         motionConfidence.ax,motionConfidence.ay,motionConfidence.alpha,pivotForward,pivotLeft,
-                        snapshot.turretAngle,snapshot.turretVelocity,snapshot.target.x,snapshot.target.y,trusted);
+                        snapshot.turretAngle,snapshot.turretVelocity,snapshot.target.x,snapshot.target.y,snapshot.target.z,trusted,releasing);
                 shotConfidence=shotSolution==null?"NO CALIBRATED MOTION SOLUTION":!turretTrusted?"TURRET MOTION OUTSIDE CALIBRATION":!trusted?motionConfidence.reason:
                         !shotSolution.confident?"PREDICTED MISS EXCEEDS BOUND":"RELEASE PREDICTION WITHIN BOUNDS";
                 if(shotSolution!=null) {
@@ -164,8 +213,11 @@ public final class RobotCoordinator {
             if(!targetFresh)turret.reset();
             ScoringController.Input shot=new ScoringController.Input();
             shot.nowSec=now;shot.acquiredSec=snapshot.acquiredSec;shot.healthy=snapshot.healthy;
-            shot.enabled=input.enabled;shot.start=input.shoot;shot.cancel=input.cancel||input.cancelShot;
-            shot.burst=input.burst;
+            shot.enabled=input.enabled;shot.start=input.shoot;shot.cancel=input.cancel||input.cancelShot||input.mechanismsInhibited;
+            shot.requestId=input.shotRequestId;
+            shot.burst=input.burst;shot.preSpin=input.preSpin;shot.launcher=snapshot.launcher;
+            shot.targetHeight=targetFresh?snapshot.target.z:Double.NaN;
+            shot.impact=targetFresh?snapshot.target:null;shot.carried=inventory.load();
             shot.resetFault=input.resetFault&&!input.enabled&&!input.shoot&&!input.intake&&input.fieldX==0&&input.fieldY==0&&input.turn==0;
             shot.staged=snapshot.staged;shot.exit=snapshot.exit;shot.rpm=snapshot.rpm;
             shot.targetFresh=targetFresh;shot.targetObservedSec=targetFresh?snapshot.target.exposureSec:Double.NaN;
@@ -181,6 +233,24 @@ public final class RobotCoordinator {
             }
             shot.stationary=snapshot.robot.isVelocityValid()&&Math.hypot(snapshot.robot.getFieldVx(),snapshot.robot.getFieldVy())<=maxMotion
                     &&Math.abs(snapshot.robot.getAngularVelocityRadPerSec())<=maxTurretRate&&Math.abs(snapshot.turretVelocity)<=maxTurretRate;
+            if(movingShots==null&&stationaryShots!=null) {
+                if(!shot.stationary)stationarySince=Double.NaN;
+                else if(!Double.isFinite(stationarySince))stationarySince=snapshot.acquiredSec;
+                shot.stationary &= Double.isFinite(stationarySince)&&snapshot.acquiredSec-stationarySince>=stationaryShots.stableSec
+                        &&shotSolution!=null&&shotSolution.confident;
+                shotConfidence=shot.stationary?"CALIBRATED STATIONARY SHOT":"STOP / SETTLE / CALIBRATED STATIONARY RANGE REQUIRED";
+                if(shotSolution!=null) {
+                    shot.selectedShot=shotSolution.selection;shot.rangeInches=shotSolution.equivalentRange;
+                    shot.releaseDelaySec=shotSolution.selection.releaseDelaySec;
+                    shot.releaseSec=releasing&&Double.isFinite(committedReleaseSec)?committedReleaseSec:shotSolution.releaseSec;
+                    if(releasing&&Double.isFinite(committedReleaseSec))shotSolution=shotSolution.atRelease(committedReleaseSec);
+                    shot.releaseUncertaintySec=shotSolution.selection.releaseUncertaintySec;
+                    double error=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-snapshot.robot.getHeadingRad()-snapshot.turretAngle));
+                    shotMissBoundInches+=shot.rangeInches*Math.sin(Math.min(Math.PI/2,error));
+                    shot.stationary &= shotMissBoundInches<=Math.min(stationaryShots.maxMiss,snapshot.target.lipClearance);
+                    shot.aimReady &= error<=aimTolerance;
+                }else shot.aimReady=false;
+            }
             if(movingShots!=null) {
                 // With compensation configured, even a stopped robot needs a valid calibrated solution.
                 shot.stationary=false;
@@ -190,12 +260,13 @@ public final class RobotCoordinator {
                     shot.selectedShot=shotSolution.selection;shot.rangeInches=shotSolution.equivalentRange;
                     shot.releaseDelaySec=shotSolution.releaseSec-now;
                     shot.releaseSec=shotSolution.releaseSec;
-                    shot.releaseUncertaintySec=movingShots.settings.releaseUncertaintySec;
+                    shot.releaseUncertaintySec=shotSolution.selection.hasReleaseMeasurement()?shotSolution.selection.releaseUncertaintySec:movingShots.settings.releaseUncertaintySec;
                     double futureTurret=snapshot.turretAngle+snapshot.turretVelocity*shot.releaseDelaySec;
                     double physicalBearing=shotSolution.releaseHeading+futureTurret;
                     double aimError=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-physicalBearing));
                     shotMissBoundInches+=shotSolution.equivalentRange*Math.sin(Math.min(Math.PI/2,aimError));
-                    if(shot.motionReady&&shotMissBoundInches>movingShots.settings.maxMissInches) {
+                    double allowedMiss=snapshot.target.internalPoint?Math.min(movingShots.settings.maxMissInches,snapshot.target.lipClearance):movingShots.settings.maxMissInches;
+                    if(shot.motionReady&&(!Double.isFinite(allowedMiss)||shotMissBoundInches>allowedMiss)) {
                         shot.motionReady=false;shotConfidence="AIM ERROR EXCEEDS MISS BOUND";
                     }
                     shot.aimReady &= turret.releaseAngleReachable(futureTurret)
@@ -205,8 +276,18 @@ public final class RobotCoordinator {
             HiveTracker.State hiveState=hive.state(now);
             shot.hiveState=hiveState;
             shot.hiveStable=hiveState==HiveTracker.State.SIDE_A_UP||hiveState==HiveTracker.State.SIDE_B_UP;
+            shotTipProbability=Double.NaN;
+            if(shotTipModel!=null&&shotSolution!=null&&shot.impact!=null&&Double.isFinite(scoring.cadenceAt(shotSolution.releaseSec))) {
+                ShotSelector.Selection selected=shotSolution.selection;
+                double uncertainty=selected.flightUncertaintySec+selected.releaseUncertaintySec;
+                double cadence=scoring.cadenceAt(shotSolution.releaseSec);
+                double probability=shotTipModel.getTipProbability(new ShotTipContext(inventory.load(),selected,shot.impact,
+                        hiveState,cadence,shotSolution.releaseSec+selected.flightSec-uncertainty,
+                        shotSolution.releaseSec+selected.flightSec+uncertainty,scoring.inFlight()));
+                if(Double.isFinite(probability)&&probability>=0&&probability<=1)shotTipProbability=probability;
+            }
             ScoringController.Output output=scoring.update(shot);
-            if(movingShots!=null&&!releasing&&scoring.state()==ScoringController.State.FEED_ONE&&output.feeder>0)
+            if(shotSolution!=null&&!releasing&&scoring.state()==ScoringController.State.FEED_ONE&&output.feeder>0)
                 committedReleaseSec=shotSolution.releaseSec;
             if(before!=ScoringController.State.WAIT_FOR_HIVE&&scoring.state()==ScoringController.State.WAIT_FOR_HIVE) {
                 hive.reset();hiveFrameFloor=now;
@@ -215,11 +296,27 @@ public final class RobotCoordinator {
                 command.enabled=true;command.fieldX=input.fieldX;command.fieldY=input.fieldY;
                 command.turn=assist.turn(input.turn,aim==null?0:aim.requestedChassisOmega,input.unwindAssist,true);
                 command.turretPower=aim==null?0:aim.turretMotorPower;
+                command.acquiredSec=now;
+                ShotRecipe commanded=scoring.currentRecipe();
+                if(commanded!=null&&commanded.physical()) {command.pitchRad=commanded.pitchRad;command.gapMm=commanded.gapMm;}
                 command.rpm=output.rpm;command.hood=output.hood;command.compression=output.compression;
                 command.transfer=output.transfer;command.feeder=output.feeder;
-                command.intake=input.intake&&inventory.canIntake()&&scoring.state()==ScoringController.State.IDLE?intakePower:0;
+                command.intake=input.intake&&inventory.canIntake()&&(scoring.state()==ScoringController.State.IDLE
+                        ||(feedStagesIsolated&&scoring.state()!=ScoringController.State.FAULT
+                            &&scoring.state()!=ScoringController.State.REVERSE))?intakePower:0;
+                if(input.mechanismsInhibited) {
+                    command.turretPower=command.rpm=command.intake=command.transfer=command.feeder=0;
+                    command.hood=command.compression=command.pitchRad=command.gapMm=Double.NaN;
+                }
             }
-            command.reason=reason=output.reason+(movingShots!=null&&!shot.motionReady?"; "+shotConfidence:"");io.write(command);
+            command.reason=reason=output.reason+(movingShots!=null&&!shot.motionReady||stationaryShots!=null&&!shot.stationary?"; "+shotConfidence:"");
+            long writeStarted=System.nanoTime();
+            try {io.write(command);}finally {writeSeconds=(System.nanoTime()-writeStarted)*1e-9;}
+            if(journal!=null)journal.record(now,scoring.state(),snapshot,command,scoring.currentRecipe(),shotSolution,
+                    aim==null?Double.NaN:AngleUtil.wrapRadians(aim.targetBearing-snapshot.robot.getHeadingRad()),
+                    motionConfidence==null?0:motionConfidence.ax,motionConfidence==null?0:motionConfidence.ay,
+                    motionConfidence==null?0:motionConfidence.alpha,shotMissBoundInches);
         } catch(RuntimeException failure) {fault=true;reason="ROBOT FAULT: "+failure.getClass().getSimpleName();scoring.cancel();io.stop();}
+        finally {cycleSeconds=(System.nanoTime()-cycleStarted)*1e-9;}
     }
 }

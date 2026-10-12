@@ -37,7 +37,10 @@ public final class LimelightTargetSource {
             boolean allowed=false;for(int id:allowedIds)if(id==target.getFiducialId())allowed=true;
             if(!allowed||target.getTargetPoseCameraSpace()==null)continue;
             Position position=target.getTargetPoseCameraSpace().getPosition().toUnit(DistanceUnit.INCH);
-            cached=transform.project(position.x,position.y,position.z,exposure,target.getFiducialId(),classifier.classify(target),history,turret,generation);
+            YawPitchRollAngles orientation=target.getTargetPoseCameraSpace().getOrientation();
+            double[] tagRotation=CellTargetGeometry.rotation(orientation.getYaw(AngleUnit.RADIANS),
+                    orientation.getPitch(AngleUnit.RADIANS),orientation.getRoll(AngleUnit.RADIANS));
+            cached=transform.project(position.x,position.y,position.z,tagRotation,exposure,target.getFiducialId(),classifier.classify(target),history,turret,generation);
             if(cached!=null)return cached;
         }
         return null;

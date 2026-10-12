@@ -1,13 +1,15 @@
 package org.firstinspires.ftc.teamcode.turret;
 
 import com.qualcomm.robotcore.hardware.AnalogInput;
-import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.CRServo;
+import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
-/** REV motor translation, absolute acquisition, and final output interlock. No targeting logic. */
+/** Axon CR-servo translation, absolute acquisition, and final output interlock. No targeting logic. */
 public final class RevTurretIO implements TurretIO {
-    private final DcMotor motor;
+    private final CRServo servo;
+    private final AxonCrCalibration calibration;
     private final AbsoluteTurretSensor sensor;
     public final TurretEncoderSample sample = new TurretEncoderSample();
     public final TurretOutputSafety safety;
@@ -34,16 +36,19 @@ public final class RevTurretIO implements TurretIO {
     }
     private RevTurretIO(HardwareMap map, TurretOutputSafety safety, boolean competition) {
         this.safety=safety;this.competition=competition;
-        motor = map.get(DcMotor.class, TurretHardwareConfig.MOTOR_NAME);
+        calibration = TurretHardwareConfig.CR_CALIBRATION;
+        if(calibration==null||!TurretHardwareConfig.CR_MODE_AND_NEUTRAL_VERIFIED)
+            throw new IllegalStateException("Verify Axon CR firmware, pulse calibration and neutral before initialization");
+        servo = map.get(CRServo.class, TurretHardwareConfig.SERVO_NAME);
+        if(!(servo instanceof PwmControl))throw new IllegalStateException("Calibrated CR PWM control required");
         AbsoluteTurretSensor selected;
         try {
-            motor.setPower(0);
-            motor.setDirection(DcMotorSimple.Direction.FORWARD);
-            motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-            motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            servo.setDirection(DcMotorSimple.Direction.FORWARD);
+            ((PwmControl)servo).setPwmRange(new PwmControl.PwmRange(calibration.lowUs,calibration.highUs,calibration.frameUs));
+            servo.setPower(calibration.sdkPower(0));
             selected = selectSensor(map);
         } catch (RuntimeException failure) {
-            motor.setPower(0);
+            servo.setPower(calibration.sdkPower(0));
             throw failure;
         }
         sensor = selected;
@@ -107,7 +112,9 @@ public final class RevTurretIO implements TurretIO {
     public void command(double demand, boolean armed, boolean deadman, boolean emergencyStop) {
         double age = sampleAgeSec();
         boolean fresh = lastReadNanos != 0 && age >= 0 && age <= TurretHardwareConfig.MAX_DT_SEC;
-        boolean configured = TurretHardwareConfig.WIRING_AND_TRANSFER_CONFIRMED
+        boolean configured = TurretHardwareConfig.CR_MODE_AND_NEUTRAL_VERIFIED
+                && calibration.sign == TurretHardwareConfig.MOTOR_SIGN
+                && TurretHardwareConfig.WIRING_AND_TRANSFER_CONFIRMED
                 && TurretHardwareConfig.OUTPUT_SIDE_ONE_TO_ONE_CONFIRMED
                 && TurretHardwareConfig.ENCODER_SIGN_VERIFIED && TurretHardwareConfig.LIMITS_CONFIRMED
                 && TurretHardwareConfig.BENCH_POWER_CONFIRMED
@@ -124,12 +131,12 @@ public final class RevTurretIO implements TurretIO {
     }
     private void write(double power) {
         try {
-            motor.setPower(power * TurretHardwareConfig.MOTOR_SIGN);
+            servo.setPower(calibration.sdkPower(power));
             appliedPower = power;
         } catch (RuntimeException failure) {
-            motorFault = "MOTOR WRITE FAILURE: " + failure.getClass().getSimpleName();
+            motorFault = "CR SERVO WRITE FAILURE: " + failure.getClass().getSimpleName();
             appliedPower = Double.NaN; // Actual output cannot be confirmed if both writes fail.
-            try { motor.setPower(0); appliedPower = 0; }
+            try { servo.setPower(calibration.sdkPower(0)); appliedPower = 0; }
             catch (RuntimeException ignored) { motorFault += " / ZERO WRITE FAILED: USE PHYSICAL STOP"; }
         }
     }

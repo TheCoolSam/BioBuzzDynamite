@@ -13,6 +13,13 @@ mapping/drive regressions, turret bench logic, audit regressions, and integrated
 robot/scoring/autonomous scenarios. Any compilation error or failed assertion stops the script.
 Output goes into the ignored `build/desktop-tests` directory.
 
+`CompetitionReadinessScenarios` additionally checks persistent autonomous action
+IDs, constrained wall departure, independent stationary scoring, basic mecanum
+mixing, deliberate drive-only recovery and observer outcomes with run identity.
+The measured profiles remain disabled until physical acceptance. For controls,
+configuration dependencies and recovery limits, see
+[`COMPETITION_READINESS_IMPLEMENTATION_2026-10-11.md`](../doc/audits/COMPETITION_READINESS_IMPLEMENTATION_2026-10-11.md).
+
 These checks include Pedro core mapping and simulated drive behavior. They do
 not exercise SDK hardware adapters, Android packaging, or physical hardware.
 Build `:TeamCode:assembleDebug` separately in Android Studio

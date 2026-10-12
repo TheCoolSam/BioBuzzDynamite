@@ -4,7 +4,10 @@ package org.firstinspires.ftc.teamcode.turret;
 public final class TurretHardwareConfig {
     public enum Backend { UNSELECTED, ANALOG_ABSOLUTE, PWM_ABSOLUTE }
     public static final Backend BACKEND = Backend.UNSELECTED;
-    public static final String MOTOR_NAME = "turretMotor";
+    public static final String SERVO_NAME = "turretYaw";
+    public static final boolean CR_MODE_AND_NEUTRAL_VERIFIED = false;
+    // Set from loaded Axon CR firmware and measured pulse/stop behavior, never inferred.
+    public static final AxonCrCalibration CR_CALIBRATION = null;
     public static final String ENCODER_NAME = "turretEncoder";
     public static final int MOTOR_SIGN = 1; // SDK FORWARD, then multiply normalized power
     public static final int ENCODER_SIGN = 1;

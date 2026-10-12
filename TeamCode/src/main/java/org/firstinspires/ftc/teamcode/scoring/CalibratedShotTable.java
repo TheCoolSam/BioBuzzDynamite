@@ -10,13 +10,24 @@ public final class CalibratedShotTable implements ShotSelector {
     public static final class Point {
         public final double rangeInches, flightSec, flightUncertaintySec;
         public final ShotRecipe recipe;
+        public final double releaseDelaySec,releaseUncertaintySec,targetHeight,heightTolerance;
         public Point(double rangeInches, ShotRecipe recipe, double flightSec, double flightUncertaintySec) {
+            this(rangeInches,recipe,flightSec,flightUncertaintySec,Double.NaN,Double.NaN,Double.NaN,Double.NaN);
+        }
+        public Point(double rangeInches,ShotRecipe recipe,double flightSec,double flightUncertaintySec,
+                double releaseDelaySec,double releaseUncertaintySec,double targetHeight,double heightTolerance) {
             if (!Double.isFinite(rangeInches) || rangeInches <= 0 || recipe == null
                     || !recipe.rangeCalibrated || rangeInches < recipe.minRange || rangeInches > recipe.maxRange
                     || !new Selection(recipe, flightSec, flightUncertaintySec).hasFlightMeasurement())
                 throw new IllegalArgumentException("Measured range, recipe and flight interval required");
             this.rangeInches = rangeInches; this.recipe = recipe;
             this.flightSec = flightSec; this.flightUncertaintySec = flightUncertaintySec;
+            this.releaseDelaySec=releaseDelaySec;this.releaseUncertaintySec=releaseUncertaintySec;
+            this.targetHeight=targetHeight;this.heightTolerance=heightTolerance;
+            if(recipe.physical()&&(!new Selection(recipe,flightSec,flightUncertaintySec,releaseDelaySec,
+                    releaseUncertaintySec,targetHeight,heightTolerance).hasReleaseMeasurement()
+                    ||!Double.isFinite(targetHeight)||!Double.isFinite(heightTolerance)||heightTolerance<0))
+                throw new IllegalArgumentException("Physical shots need measured release timing and target height");
         }
     }
     private final Map<BallType,List<Point>> tables = new EnumMap<BallType,List<Point>>(BallType.class);
@@ -30,8 +41,14 @@ public final class CalibratedShotTable implements ShotSelector {
         for (List<Point> table : tables.values()) {
             Collections.sort(table, (a,b) -> Double.compare(a.rangeInches,b.rangeInches));
             if (table.size() < 2) throw new IllegalArgumentException("At least two ranges per ball type required");
-            for (int i=1;i<table.size();i++) if (table.get(i).rangeInches <= table.get(i-1).rangeInches)
-                throw new IllegalArgumentException("Duplicate calibration range");
+            for (int i=1;i<table.size();i++) {
+                Point a=table.get(i-1),b=table.get(i);
+                if(b.rangeInches<=a.rangeInches)throw new IllegalArgumentException("Duplicate calibration range");
+                if(a.recipe.geometry!=b.recipe.geometry||a.recipe.physical()!=b.recipe.physical())
+                    throw new IllegalArgumentException("One geometry revision per table required");
+                if(a.recipe.physical()&&(a.recipe.gapMm!=b.recipe.gapMm||a.targetHeight!=b.targetHeight))
+                    throw new IllegalArgumentException("Initial per-type tables hold gap and target height constant");
+            }
         }
     }
     @Override public Selection select(BallType type, double range) {
@@ -47,8 +64,12 @@ public final class CalibratedShotTable implements ShotSelector {
                     lerp(x.compression,y.compression,t),Math.max(x.settleSec,y.settleSec),
                     Math.min(x.rpmTolerance,y.rpmTolerance),Math.max(x.rpmStableSec,y.rpmStableSec),
                     table.get(0).rangeInches,table.get(table.size()-1).rangeInches);
-            return new Selection(recipe,lerp(a.flightSec,b.flightSec,t),
-                    Math.max(a.flightUncertaintySec,b.flightUncertaintySec));
+            if(x.physical())recipe=new ShotRecipe(type,lerp(x.rpm,y.rpm,t),lerp(x.pitchRad,y.pitchRad,t),x.gapMm,x.geometry,
+                    Math.max(x.settleSec,y.settleSec),Math.min(x.rpmTolerance,y.rpmTolerance),Math.max(x.rpmStableSec,y.rpmStableSec),
+                    table.get(0).rangeInches,table.get(table.size()-1).rangeInches);
+            return new Selection(recipe,lerp(a.flightSec,b.flightSec,t),Math.max(a.flightUncertaintySec,b.flightUncertaintySec),
+                    lerp(a.releaseDelaySec,b.releaseDelaySec,t),Math.max(a.releaseUncertaintySec,b.releaseUncertaintySec),
+                    a.targetHeight,Math.min(a.heightTolerance,b.heightTolerance));
         }
         return null;
     }

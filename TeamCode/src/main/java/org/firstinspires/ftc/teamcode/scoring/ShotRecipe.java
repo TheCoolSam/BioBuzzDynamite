@@ -8,6 +8,8 @@ public final class ShotRecipe {
     public final double rpm, hood, compression, settleSec, rpmTolerance, rpmStableSec;
     public final double minRange,maxRange;
     public final boolean rangeCalibrated;
+    public final double pitchRad,gapMm;
+    public final LauncherGeometry geometry;
     public ShotRecipe(BallType type,double rpm,double hood,double compression,double settleSec,
             double rpmTolerance,double rpmStableSec) {
         this(type,rpm,hood,compression,settleSec,rpmTolerance,rpmStableSec,0,Double.POSITIVE_INFINITY,false);
@@ -27,6 +29,19 @@ public final class ShotRecipe {
         this.settleSec=settleSec;this.rpmTolerance=rpmTolerance;this.rpmStableSec=rpmStableSec;
         if(calibrated&&(!Double.isFinite(minRange)||!Double.isFinite(maxRange)||minRange<=0||maxRange<=minRange))throw new IllegalArgumentException("Measured shot range required");
         this.minRange=minRange;this.maxRange=maxRange;this.rangeCalibrated=calibrated;
+        pitchRad=gapMm=Double.NaN;geometry=null;
     }
+    /** Physical recipes map pitch/gap to commands only through the measured mechanism map. */
+    public ShotRecipe(BallType type,double rpm,double pitchRad,double gapMm,LauncherGeometry geometry,
+            double settleSec,double rpmTolerance,double rpmStableSec,double minRange,double maxRange) {
+        if(geometry==null||geometry.at(pitchRad,gapMm)==null)throw new IllegalArgumentException("Shot outside measured geometry");
+        ShotRecipe checked=new ShotRecipe(type,rpm,geometry.pitchServo.map(pitchRad),geometry.gapServo.map(gapMm),
+                settleSec,rpmTolerance,rpmStableSec,minRange,maxRange);
+        this.type=type;this.rpm=rpm;hood=checked.hood;compression=checked.compression;
+        this.settleSec=settleSec;this.rpmTolerance=rpmTolerance;this.rpmStableSec=rpmStableSec;
+        this.minRange=minRange;this.maxRange=maxRange;rangeCalibrated=true;
+        this.pitchRad=pitchRad;this.gapMm=gapMm;this.geometry=geometry;
+    }
+    public boolean physical() {return geometry!=null;}
     private static boolean unit(double v) { return Double.isFinite(v) && v>=0 && v<=1; }
 }
