@@ -37,7 +37,7 @@ public final class BioBuzzAutonomous extends BioBuzzTeleOp {
         input.fieldX=command.xPower;input.fieldY=command.yPower;input.turn=command.turnPower;
         input.shotRequestId=auto.shotRequestId();
         input.mechanismsInhibited=auto.departing();
-        input.cancelShot=command.action==FixedRouteAuto.Action.PARK;
+        input.cancelShot=command.action!=FixedRouteAuto.Action.SHOOT;
         input.cancel=now-startSec>=30;
         if(now-startSec>=30)input.enabled=false;
         return input;

@@ -23,7 +23,7 @@ public final class ScoringController {
         public HiveTracker.State hiveState=HiveTracker.State.UNKNOWN;
         public double releaseDelaySec,releaseUncertaintySec;
         public double releaseSec=Double.NaN;
-        public boolean healthy,enabled,start,cancel,resetFault,staged,exit,aimReady,targetFresh,stationary,hiveStable;
+        public boolean healthy,enabled,start,cancel,dismissWait,resetFault,staged,exit,aimReady,targetFresh,stationary,hiveStable;
     }
     public static final class Output {
         public final double rpm,hood,compression,transfer,feeder;
@@ -72,6 +72,13 @@ public final class ScoringController {
     private LauncherFeedback.Limits launcherLimits;
     private double pitchSince=Double.NaN,gapSince=Double.NaN,lastLauncherAcquired=Double.NaN;
     public boolean pitchReady,compressionReady,rpmReady;
+    private double holdRpm=Double.NaN;
+    /** Measured idle/hold velocity used between shots while a piece is staged or remaining. NaN keeps the stop-between-shots behavior. */
+    public void setHoldRpm(double measuredHoldRpm) {
+        if(state!=State.IDLE||!Double.isFinite(measuredHoldRpm)||measuredHoldRpm<=0)
+            throw new IllegalArgumentException("Configure measured hold RPM before arming");
+        holdRpm=measuredHoldRpm;
+    }
     public void setLauncherLimits(LauncherFeedback.Limits limits) {
         if(state!=State.IDLE||limits==null)throw new IllegalArgumentException("Configure measured feedback limits before arming");
         launcherLimits=limits;
@@ -175,7 +182,8 @@ public final class ScoringController {
                     ||committedReleaseSec-committedReleaseUncertainty>in.nowSec))
                 return fail("RELEASE TIMING OUTSIDE CALIBRATION",in.nowSec);
             if(burstArmed)return holding("SHOT CONFIRMED / BURST RECOVERY");
-            return in.preSpin?holding("WAIT FOR HIVE / DELIBERATE PRE-SPIN"):Output.stopped("WAIT FOR HIVE / REACQUIRE");
+            if(in.preSpin)return holding("WAIT FOR HIVE / DELIBERATE PRE-SPIN");
+            return idleOrHold(in,"WAIT FOR HIVE / REACQUIRE","WAIT FOR HIVE / HOLD");
         }
         if(exitEdge){inventory.markUncertain();return fail("UNEXPECTED EXIT; RECONCILE INVENTORY",in.nowSec);}
         if (state==State.IDLE && ((in.requestId==0&&startEdge)||actionPending)) {
@@ -190,14 +198,18 @@ public final class ScoringController {
             if(activeRequestId>0)acceptedRequestId=activeRequestId;
             retries=0;activeTarget=in.targetId;transition(State.PREPARE,in.nowSec);
         }
+        if (in.dismissWait && state==State.WAIT_FOR_HIVE) {
+            transition(State.IDLE,in.nowSec);
+        } else if (in.dismissWait && state==State.PREPARE) {
+            cancel();
+        }
         if (state==State.IDLE) {
             if(in.preSpin) {
                 ShotSelector.Selection next=select(in);
                 if(next!=null) {applySelection(next,in.nowSec);rpmReady=updateRpm(in)&&in.acquiredSec-rpmSince>=recipe.rpmStableSec;
                     updateLauncher(in);return holding("DELIBERATE PRE-SPIN / FEED DISABLED");}
             }
-            recipe=null;selection=null;rpmSince=pitchSince=gapSince=Double.NaN;
-            pitchReady=compressionReady=rpmReady=false;return Output.stopped("IDLE");
+            return idleOrHold(in,"IDLE","IDLE HOLD");
         }
         double elapsed=in.nowSec-entered;
         if (state==State.WAIT_FOR_HIVE) {
@@ -225,10 +237,14 @@ public final class ScoringController {
                 if (in.hiveStable && in.targetFresh && observedFresh(in.nowSec,in.hiveObservedSec) && observedFresh(in.nowSec,in.targetObservedSec)
                         && in.hiveObservedSec>entered && in.targetObservedSec>entered
                         && elapsed>=recipe.settleSec) {
-                    cancel();return Output.stopped("SHOT CONFIRMED; NEW START REQUIRED");
+                    cancel();return idleOrHold(in,"SHOT CONFIRMED; NEW START REQUIRED","SHOT CONFIRMED; HOLD");
                 }
-                if (elapsed>timing.hive) return fail("HIVE REACQUISITION TIMEOUT",in.nowSec);
-                return in.preSpin?holding("WAIT FOR HIVE / DELIBERATE PRE-SPIN"):Output.stopped("WAIT FOR HIVE / REACQUIRE");
+                if (elapsed>timing.hive) {
+                    transition(State.IDLE,in.nowSec);
+                    return idleOrHold(in,"SHOT CONFIRMED; HIVE WAIT RELEASED","SHOT CONFIRMED; HIVE WAIT RELEASED / HOLD");
+                }
+                if (in.preSpin) return holding("WAIT FOR HIVE / DELIBERATE PRE-SPIN");
+                return idleOrHold(in,"WAIT FOR HIVE / REACQUIRE","WAIT FOR HIVE / HOLD");
             }
         }
         if (state==State.REVERSE) {
@@ -314,6 +330,23 @@ public final class ScoringController {
                 &&Math.abs(a.hood-b.hood)<=hoodRetargetTolerance&&Math.abs(a.compression-b.compression)<=compressionRetargetTolerance;
     }
     private Output holding(String reason) {return new Output(recipe.rpm,recipe.hood,recipe.compression,0,0,reason);}
+    private boolean holdWanted(Input in) {
+        return Double.isFinite(holdRpm)&&holdRpm>0&&in.enabled&&!in.cancel&&(in.staged||inventory.first()!=null);
+    }
+    private Output idleOrHold(Input in,String stoppedReason,String holdReason) {
+        if(!holdWanted(in)) {
+            if(state==State.IDLE) {
+                recipe=null;selection=null;rpmSince=pitchSince=gapSince=Double.NaN;
+                pitchReady=compressionReady=rpmReady=false;
+            }
+            return Output.stopped(stoppedReason);
+        }
+        ShotSelector.Selection next=select(in);
+        if(next!=null)applySelection(next,in.nowSec);
+        double hood=recipe==null?Double.NaN:recipe.hood,compression=recipe==null?Double.NaN:recipe.compression;
+        if(recipe!=null) {updateRpm(in);updateLauncher(in);}
+        return new Output(holdRpm,hood,compression,0,0,holdReason);
+    }
     private void retireFlights(double now) {
         double settle=flightSettling();
         Iterator<BurstPolicy.Flight> it=flights.iterator();

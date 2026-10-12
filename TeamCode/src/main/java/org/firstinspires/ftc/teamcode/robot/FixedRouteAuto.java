@@ -56,8 +56,8 @@ public final class FixedRouteAuto {
             double deadline,double parkAt,double positionTolerance,double headingTolerance,double kp,double turnKp,double cap,
             Departure departure) {
         this(route,park,bounds,deadline,parkAt,positionTolerance,headingTolerance,kp,turnKp,cap);
-        if(departure!=null&&!bounds.segmentSafe(departure.x,departure.y,departure.x,departure.y))
-            throw new IllegalArgumentException("Departure endpoint needs full swept clearance");
+        if(departure!=null&&!bounds.poseSafe(departure.x,departure.y,departure.heading,departure.halfForward,departure.halfLeft))
+            throw new IllegalArgumentException("Departure endpoint outside oriented footprint");
         this.departure=departure;
     }
     public FixedRouteAuto(Waypoint[] route,Waypoint park,SweptCaptureFeasibility bounds,
@@ -92,7 +92,8 @@ public final class FixedRouteAuto {
                 failed=true;return zero(Action.FAULT,"WALL DEPARTURE ENVELOPE / TIME / HEADING FAULT");
             }
             double dx=departure.x-robot.getFieldX(),dy=departure.y-robot.getFieldY();
-            if(Math.hypot(dx,dy)<=positionTolerance&&bounds.segmentSafe(robot.getFieldX(),robot.getFieldY(),robot.getFieldX(),robot.getFieldY())) {
+            if(Math.hypot(dx,dy)<=positionTolerance&&bounds.poseSafe(robot.getFieldX(),robot.getFieldY(),
+                    robot.getHeadingRad(),departure.halfForward,departure.halfLeft)) {
                 departed=true;legStarted=now;return zero(Action.DRIVE,"WALL DEPARTURE COMPLETE");
             }
             double scale=Math.max(1,Math.hypot(dx*kp,dy*kp)/cap);
@@ -104,7 +105,8 @@ public final class FixedRouteAuto {
         Waypoint target=current();
         if(target.collect&&pickupConfirmed)pickupSeen=true;
         if (parking&&now-legStarted>park.timeoutSec) {failed=true;return zero(Action.FAULT,"PARK TIMEOUT");}
-        if (!bounds.segmentSafe(robot.getFieldX(),robot.getFieldY(),target.x,target.y)) {
+        if (!bounds.pathSafe(robot.getFieldX(),robot.getFieldY(),robot.getHeadingRad(),
+                target.x,target.y,target.headingRad,legHalfForward(),legHalfLeft())) {
             failed=true;return zero(Action.FAULT,"ROUTE / FOOTPRINT BLOCKED");
         }
         if (waitingShot) {
@@ -127,5 +129,7 @@ public final class FixedRouteAuto {
                 AngleUtil.clamp(dh*turnKp,-cap,cap),parking?"PARK":"DRIVE");
     }
     private Waypoint current() {return parking||index>=route.length?park:route[index];}
+    private double legHalfForward() {return departure!=null?departure.halfForward:bounds.halfForward();}
+    private double legHalfLeft() {return departure!=null?departure.halfLeft:bounds.halfLeft();}
     private static Command zero(Action action,String reason) {return new Command(action,0,0,0,reason);}
 }

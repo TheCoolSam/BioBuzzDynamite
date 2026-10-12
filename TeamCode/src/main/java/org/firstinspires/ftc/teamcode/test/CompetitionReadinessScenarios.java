@@ -7,6 +7,7 @@ import org.firstinspires.ftc.teamcode.scoring.*;
 import org.firstinspires.ftc.teamcode.state.*;
 import org.firstinspires.ftc.teamcode.turret.*;
 import org.firstinspires.ftc.teamcode.vision.pieces.*;
+import org.firstinspires.ftc.teamcode.match.AllianceColor;
 
 /** Synthetic fault-injection contracts. Does not establish physical calibration. */
 public final class CompetitionReadinessScenarios {
@@ -43,6 +44,20 @@ public final class CompetitionReadinessScenarios {
         c.update(shot(.20,2));check(c.acceptedRequestId()==2&&c.state()==ScoringController.State.PREPARE,"next action accepted after idle");
         c.update(shot(.26,2));in=shot(.28,2);in.exit=true;c.update(in);c.update(shot(.36,2));
         in=shot(.38,2);in.start=true;c.update(in);check(c.state()==ScoringController.State.IDLE,"duplicate completed ID never replays even with start edge");
+        c=scorer(inventory());c.update(shot(0,4));c.update(shot(.06,4));in=shot(.08,4);in.exit=true;c.update(in);
+        check(c.state()==ScoringController.State.WAIT_FOR_HIVE,"confirmed release waits");
+        in=shot(.10,0);in.dismissWait=true;ScoringController.Output dismissed=c.update(in);
+        check(c.state()==ScoringController.State.IDLE&&c.completedRequestId()==4&&c.failedRequestId()==0,"dismissWait finishes hive wait without faulting");
+        near(dismissed.feeder,0,"dismissed wait never feeds");
+        c=scorer(inventory());c.setHoldRpm(400);
+        in=shot(0,0);ScoringController.Output held=c.update(in);
+        near(held.rpm,400,"configured hold spins while a piece is staged");near(held.feeder,0,"hold never feeds");
+        in=shot(.02,0);in.enabled=false;near(c.update(in).rpm,0,"disable stops the flywheel");
+        c=scorer(inventory());c.setHoldRpm(400);c.update(shot(0,5));c.update(shot(.06,5));in=shot(.08,5);in.exit=true;
+        near(c.update(in).rpm,400,"hold continues through WAIT_FOR_HIVE with remaining inventory");
+        PieceInventory empty=new PieceInventory(4);empty.reconcile(Collections.<BallType>emptyList());
+        ScoringController last=scorer(empty);last.setHoldRpm(400);in=shot(0,0);in.staged=false;
+        near(last.update(in).rpm,0,"empty unstaged inventory stops the flywheel");
         c=scorer(inventory());c.update(shot(0,7));in=shot(.01,7);in.cancel=true;c.update(in);
         check(c.failedRequestId()==7&&c.completedRequestId()==0,"cancel before release reports failed action");
         c.update(shot(.02,7));check(c.state()==ScoringController.State.IDLE,"cancelled accepted ID never retries");
@@ -73,9 +88,21 @@ public final class CompetitionReadinessScenarios {
         cmd=a.update(pose(.1,10,40,0,1,0),.1,0L,false,false);check(cmd.action==FixedRouteAuto.Action.FAULT,"departure localization reset faults");
         check(!bounds.departureSafe(8,40,24,40,0,9,9),"actual out-of-field rectangle refused");
         check(!bounds.departureSafe(9,40,24,40,0,10,10),"understated enclosing radius refused");
-        rejects(()->auto(bounds,new FixedRouteAuto.Departure(9,40,0,9,9,.03,2)),"departure endpoint needs full clearance");
+        auto(bounds,new FixedRouteAuto.Departure(9,40,0,9,9,.03,2));
+        check(bounds.poseSafe(9,40,0,9,9),"wall-adjacent oriented endpoint accepted");
+        rejects(()->auto(bounds,new FixedRouteAuto.Departure(8,40,0,9,9,.03,2)),"oriented endpoint still refuses out-of-field rectangle");
         SweptCaptureFeasibility blocked=new SweptCaptureFeasibility(144,144,Math.hypot(9,9),new double[][]{{24,39,25,41}});
         check(!blocked.departureSafe(9,40,40,40,0,9,9),"departure still protects obstacles");
+        SweptCaptureFeasibility oriented=new SweptCaptureFeasibility(144,144,Math.hypot(9,9),null,9,9);
+        FixedRouteAuto wallPark=new FixedRouteAuto(new FixedRouteAuto.Waypoint[]{new FixedRouteAuto.Waypoint(24,40,0,3,false)},
+                new FixedRouteAuto.Waypoint(9,40,0,3,false),oriented,30,25,.5,.03,.1,1,.3);
+        FixedRouteAuto.Command parkCmd=wallPark.update(pose(0,24,40,0,0,0),0,0L,false,false);
+        check(parkCmd.action!=FixedRouteAuto.Action.FAULT,"first waypoint at clearance is not blocked");
+        parkCmd=wallPark.update(pose(.02,24,40,0,0,0),.02,0L,false,false);
+        check(parkCmd.action==FixedRouteAuto.Action.PARK&&parkCmd.xPower<0,"oriented wall-adjacent park is feasible");
+        check(oriented.pathSafe(24,40,0,9,40,0,9,9),"oriented park corridor stays in the wall rectangle");
+        check(!oriented.pathSafe(24,40,0,8,40,0,9,9),"oriented corridor still refuses out-of-field park");
+        check(!new SweptCaptureFeasibility(144,144,Math.hypot(9,9),null).pathSafe(24,40,0,9,40,0),"circle fallback still blocks wall park");
     }
     private static void basicDrive() {
         rejects(()->new BasicDrive.Settings(new String[]{"fl","bl","fr","br"},new boolean[4],.3,false),"unverified hardware cannot arm basic drive");
@@ -85,6 +112,22 @@ public final class CompetitionReadinessScenarios {
         double[] strafe=BasicDrive.powers(1,0,0,.3);near(strafe[0],.3,"right strafe FL");near(strafe[1],-.3,"right strafe BL");
         for(double p:BasicDrive.powers(1,1,1,.3))check(Math.abs(p)<=.3,"combined mix stays capped");
         check(BasicDrive.powers(Double.NaN,0,0,.3)==null&&BasicDrive.powers(2,0,0,.3)==null,"bad drive demands refused");
+        DriverStickMap.Command robot=DriverStickMap.robotCentric(1,0,1);
+        near(robot.fieldX,1,"robot-centric stick right is +X");near(robot.turn,-1,"stick right is clockwise");
+        DriverStickMap.Command stickUp=DriverStickMap.robotCentric(0,-1,0);
+        near(stickUp.fieldY,1,"robot-centric stick up is +Y");
+        DriverStickMap.Command redUp=DriverStickMap.fieldCentric(0,-1,1,AllianceColor.RED);
+        near(redUp.fieldX,1,"red stick up is away from the red wall (+X)");near(redUp.fieldY,0,"red stick up is not field +Y");
+        near(redUp.turn,-1,"field-centric turn is also clockwise");
+        DriverStickMap.Command redRight=DriverStickMap.fieldCentric(1,0,0,AllianceColor.RED);
+        near(redRight.fieldX,0,"red stick right has no +X");near(redRight.fieldY,-1,"red stick right is driver-right (-Y)");
+        DriverStickMap.Command blueUp=DriverStickMap.fieldCentric(0,-1,0,AllianceColor.BLUE);
+        near(blueUp.fieldX,-1,"blue stick up is away from the blue wall (-X)");
+        DriverStickMap.Command unknown=DriverStickMap.fieldCentric(0,-1,.5,AllianceColor.UNKNOWN);
+        near(unknown.fieldX,0,"unknown alliance refuses field translation");near(unknown.fieldY,0,"unknown alliance zeroes field Y");
+        near(unknown.turn,-.5,"unknown alliance still maps clockwise turn");
+        DriverStickMap.Command rec=DriverStickMap.robotCentric(.2,.0,-.4);
+        near(rec.turn,.4,"recovery/practice mapping matches Drive Practice sign");
     }
     private static final class RecoveryIO implements RobotIO {
         Snapshot sample;Command output=new Command();boolean allowed=true,driveHealthy=true,throwRead;int enters,normalReads,recoveryReads;
@@ -106,11 +149,13 @@ public final class CompetitionReadinessScenarios {
         for(int failed=0;failed<4;failed++) {
             RecoveryIO io=new RecoveryIO();PieceInventory inventory=inventory();RobotCoordinator c=coordinator(io,inventory);
             io.at(0,new RobotIO.Health(true,failed!=0,failed!=1,failed!=2,failed!=3));
-            RobotCoordinator.Input in=new RobotCoordinator.Input();in.enabled=true;c.cycle(in,0,.02);
-            check(!io.output.enabled,"subsystem fault stops all outputs first");
-            in.recoverDrive=true;c.cycle(in,.02,.02);check(io.enters==0,"enabled recovery refused");
+            RobotCoordinator.Input in=new RobotCoordinator.Input();in.enabled=true;in.fieldX=.2;c.cycle(in,0,.02);
+            check(io.output.enabled,"non-drive glitch keeps drive commandable");
+            near(io.output.fieldX,.2,"drive demand retained through non-drive glitch");
+            check(io.output.rpm==0&&io.output.feeder==0,"non-drive glitch still inhibits launcher");
+            in.fieldX=0;in.recoverDrive=true;c.cycle(in,.02,.02);check(io.enters==0,"enabled recovery refused");
             in.enabled=false;in.fieldX=.1;c.cycle(in,.04,.02);check(io.enters==0,"moving-stick recovery refused");
-            in.fieldX=0;c.cycle(in,.06,.02);check(c.driveRecovery(),"disabled neutral recovery accepted");
+            in.fieldX=0;c.cycle(in,.06,.02);check(c.driveRecovery(),"disabled neutral recovery accepted after subsystem fault");
             int reads=io.normalReads;in.recoverDrive=false;in.enabled=true;in.fieldX=.2;in.intake=in.shoot=in.preSpin=in.unwindAssist=true;
             c.cycle(in,.08,.02);check(io.normalReads==reads&&io.recoveryReads>0,"recovery never reads failed localization/mechanisms");
             near(io.output.fieldX,.2,"robot-centric manual demand retained");
@@ -119,11 +164,71 @@ public final class CompetitionReadinessScenarios {
             in.fieldX=Double.NaN;c.cycle(in,.09,.02);check(!io.output.enabled,"nonfinite recovery demand never publishes drive");in.fieldX=.2;
             in.enabled=false;c.cycle(in,.10,.02);check(!io.output.enabled,"recovery retains deadman");
             in.enabled=true;io.driveHealthy=false;c.cycle(in,.12,.02);check(!io.output.enabled,"drive fault prevents recovery outputs");
-            if(failed==3)check(!inventory.isConfirmed(),"inventory sensor fault requires physical reconciliation");
+            if(failed==3)check(!inventory.isConfirmed(),"latched inventory sensor fault requires physical reconciliation");
         }
         RecoveryIO io=new RecoveryIO();RobotCoordinator c=coordinator(io,inventory());io.allowed=false;
         io.at(0,new RobotIO.Health(true,true,false,true,true));RobotCoordinator.Input in=new RobotCoordinator.Input();c.cycle(in,0,.02);
         in.recoverDrive=true;c.cycle(in,.02,.02);check(!c.driveRecovery(),"unconfigured or ambiguous-write recovery refused");
+        debounce();
+        bulkCache();
+    }
+    private static void debounce() {
+        RecoveryIO io=new RecoveryIO();RobotCoordinator c=coordinator(io,inventory());
+        RobotCoordinator.Input in=new RobotCoordinator.Input();in.enabled=true;in.fieldX=.25;
+        io.at(0,new RobotIO.Health(false,true,true,true,true));c.cycle(in,0,.02);
+        check(!io.output.enabled,"one drive drop stops this cycle");
+        io.at(.02,new RobotIO.Health(true,true,true,true,true));c.cycle(in,.02,.02);
+        check(io.output.enabled,"single drive drop recovers without latch");near(io.output.fieldX,.25,"drive demand resumes");
+        io.at(.04,new RobotIO.Health(false,true,true,true,true));c.cycle(in,.04,.02);
+        io.at(.06,new RobotIO.Health(false,true,true,true,true));c.cycle(in,.06,.02);
+        check(!io.output.enabled,"second consecutive drive drop latches");
+        io.at(.08,new RobotIO.Health(true,true,true,true,true));c.cycle(in,.08,.02);
+        check(!io.output.enabled,"drive latch stays fail-closed until recovery/reset");
+        io=new RecoveryIO();c=coordinator(io,inventory());
+        io.at(0,new RobotIO.Health(true,true,true,false,true));c.cycle(in,0,.02);
+        check(io.output.enabled&&io.output.rpm==0,"one launcher drop keeps drive and zeros RPM");
+        io.at(.02,new RobotIO.Health(true,true,true,true,true));c.cycle(in,.02,.02);
+        check(io.output.enabled,"launcher glitch does not latch a global fault");
+        io.at(.04,new RobotIO.Health(true,true,true,false,true));c.cycle(in,.04,.02);
+        io.at(.06,new RobotIO.Health(true,true,true,false,true));c.cycle(in,.06,.02);
+        check(io.output.enabled,"persistent launcher fault still leaves drive usable");
+        in.enabled=false;in.fieldX=0;in.resetFault=true;c.cycle(in,.08,.02);
+        in.resetFault=false;in.enabled=true;in.fieldX=.25;
+        io.at(.10,new RobotIO.Health(true,true,true,true,true));c.cycle(in,.10,.02);
+        check(io.output.enabled,"drive remains usable after launcher latch");
+        HealthWatch watch=new HealthWatch();
+        RobotIO.Health good=new RobotIO.Health(true,true,true,true,true);
+        RobotIO.Health loc=new RobotIO.Health(true,false,true,true,true);
+        HealthWatch.View view=watch.update(loc,true);
+        check(view.driveCommandable&&!view.localizationTrusted&&!view.localizationLatched,"one loc miss degrades only localization");
+        view=watch.update(good,true);
+        check(view.localizationTrusted&&!view.localizationLatched,"one loc miss recovers");
+        watch.update(loc,true);view=watch.update(loc,true);
+        check(view.localizationLatched&&view.driveCommandable,"persistent loc latches without killing drive");
+        watch.update(good,true);view=watch.update(good,true);
+        check(!view.localizationLatched&&view.localizationTrusted,"non-drive latch clears after consecutive healthy samples");
+        view=watch.update(good,false);
+        check(!view.driveCommandable&&!view.timingLatched,"one long loop drops outputs this cycle");
+        view=watch.update(good,true);
+        check(view.driveCommandable&&!view.timingLatched,"single long loop does not latch");
+        watch.update(good,false);view=watch.update(good,false);
+        check(view.timingLatched&&!view.driveCommandable,"persistent overruns latch timing fail-closed");
+    }
+    private static final class FakeHub implements HubBulkCache.Hub {
+        int manuals,clears;
+        public void setManual() {manuals++;}
+        public void clear() {clears++;}
+    }
+    private static void bulkCache() {
+        FakeHub a=new FakeHub(),b=new FakeHub();
+        HubBulkCache cache=new HubBulkCache(Arrays.asList(a,b));
+        boolean refused=false;try {cache.beginLoop();}catch(IllegalStateException expected){refused=true;}
+        check(refused,"MANUAL cache cannot clear before enable");
+        cache.enableManual();check(a.manuals==1&&b.manuals==1,"every hub is set to MANUAL");
+        cache.beginLoop();check(a.clears==1&&b.clears==1&&cache.clears()==1,"one clear per loop on every hub");
+        cache.beginLoop();check(a.clears==2&&cache.clears()==2,"clears accumulate once per beginLoop");
+        boolean nullHub=false;try {new HubBulkCache(Arrays.asList(a,(HubBulkCache.Hub)null));}catch(IllegalArgumentException expected){nullHub=true;}
+        check(nullHub,"null hub refused");
     }
     private static CalibratedShotTable table() {
         LauncherGeometry.Release[][] grid={{new LauncherGeometry.Release(10,0,12,.2),new LauncherGeometry.Release(10,0,12,.2)},
@@ -176,5 +281,44 @@ public final class CompetitionReadinessScenarios {
         check(last!=null&&last.contains("OUTCOME")&&last.contains("HIT")&&last.contains("run-1"),"observer outcome contains shot and run identity");
         check(last.split(",",-1).length==ShotJournal.HEADER.split(",").length,"outcome row matches extended schema");
     }
-    public static void main(String[] args) {actions();departures();basicDrive();recovery();stationary();outcomes();System.out.println("COMPETITION READINESS CHECKS PASSED ("+checks+")");}
+    private static void multiShotHandoff() {
+        RecoveryIO io=new RecoveryIO();PieceInventory p=inventory();RobotCoordinator robot=coordinator(io,p);
+        SweptCaptureFeasibility bounds=new SweptCaptureFeasibility(144,144,5,null);
+        FixedRouteAuto route=new FixedRouteAuto(new FixedRouteAuto.Waypoint[]{
+                new FixedRouteAuto.Waypoint(40,40,0,8,true),
+                new FixedRouteAuto.Waypoint(55,40,0,8,false,true),
+                new FixedRouteAuto.Waypoint(70,40,0,8,true)},
+                new FixedRouteAuto.Waypoint(80,40,0,5,false),bounds,30,25,1,.05,.05,1,.3);
+        RobotCoordinator.Input in=new RobotCoordinator.Input();
+        int previous=p.controlledCount(),shots=0;boolean collected=false;
+        double x=40,y=40;
+        for(int step=0;step<120;step++) {
+            double t=step*.02;
+            boolean exit=robot.scoring.state()==ScoringController.State.FEED_ONE
+                    ||robot.scoring.state()==ScoringController.State.CONFIRM_EXIT;
+            boolean entry=in.intake&&!collected&&Math.abs(x-55)<=1;
+            io.sample=new RobotIO.Snapshot(pose(t,x,y,0,0,0),t,0,0,1000,true,entry,true,exit,BallType.POLLEN,
+                    new TargetEstimate(x+80,y,t,1,0,HiveTracker.State.SIDE_A_UP),null);
+            boolean pickup=p.controlledCount()>previous;previous=p.controlledCount();
+            if(robot.snapshot==null) {in.enabled=true;robot.cycle(in,t,.02);continue;}
+            FixedRouteAuto.Command cmd=route.update(robot.snapshot.robot,t,robot.scoring.completedRequestId(),pickup,
+                    robot.scoring.state()==ScoringController.State.FAULT);
+            check(cmd.action!=FixedRouteAuto.Action.FAULT,"multi-shot route never faults: "+cmd.reason+" scoring="+robot.scoring.state());
+            in.enabled=cmd.action!=FixedRouteAuto.Action.DONE;in.fieldX=cmd.xPower;in.fieldY=cmd.yPower;in.turn=cmd.turnPower;
+            in.shotRequestId=route.shotRequestId();in.cancelShot=cmd.action!=FixedRouteAuto.Action.SHOOT;
+            in.intake=route.intakeRequested();in.mechanismsInhibited=route.departing();
+            robot.cycle(in,t,.02);
+            if(robot.scoring.completedRequestId()>shots)shots=(int)robot.scoring.completedRequestId();
+            if(pickup)collected=true;
+            if(Math.abs(cmd.xPower)>1e-6)x+=Math.signum(cmd.xPower)*Math.min(1,Math.abs(cmd.xPower)*20);
+            if(cmd.action==FixedRouteAuto.Action.DONE) {
+                check(shots>=2,"two confirmed shots before park");
+                check(collected,"collect leg ran between shots");
+                check(p.controlledCount()>=1,"second shot left remaining inventory without scoring fault");
+                return;
+            }
+        }
+        check(false,"multi-shot route should park after two shots scoring="+robot.scoring.state()+" shots="+shots);
+    }
+    public static void main(String[] args) {actions();departures();basicDrive();recovery();stationary();outcomes();multiShotHandoff();System.out.println("COMPETITION READINESS CHECKS PASSED ("+checks+")");}
 }

@@ -171,11 +171,13 @@ public final class RobotIntegrationScenarios {
         check(i.pieces().size()==3,"sensed intake once");io.at(.32,0,true,.32,0,0);c.cycle(in,.32,.02);check(i.pieces().size()==3,"held entry not duplicate");
         io.at(.34,1,false,.34,0,0);c.cycle(in,.34,.02);check(!c.history.sampleAt(.3).isPresent(),"coherent generation clears history");
         io.at(.36,1,false,0,0,0);c.cycle(in,.36,.02);check(io.output.rpm==0&&io.output.intake==0,"stale snapshot stop");
-        io.at(.38,1,false,.38,0,0);c.cycle(in,.38,.02);check(!io.output.enabled,"sensor fault latches");
-        in.enabled=false;in.intake=false;in.resetFault=true;in.fieldX=0;io.at(.4,1,false,.4,0,0);c.cycle(in,.4,.02);
-        in.resetFault=false;in.enabled=true;io.at(.42,1,false,.42,0,0);c.cycle(in,.42,.02);check(io.output.enabled,"deliberate reset resumes");
+        io.at(.38,1,false,.38,0,0);c.cycle(in,.38,.02);check(io.output.enabled,"single stale sample does not latch");
+        io.at(.40,1,false,0,0,0);c.cycle(in,.40,.02);io.at(.42,1,false,0,0,0);c.cycle(in,.42,.02);
+        check(!io.output.enabled,"consecutive stale samples latch timing fail-closed");
+        in.enabled=false;in.intake=false;in.resetFault=true;in.fieldX=0;io.at(.44,1,false,.44,0,0);c.cycle(in,.44,.02);
+        in.resetFault=false;in.enabled=true;io.at(.46,1,false,.46,0,0);c.cycle(in,.46,.02);check(io.output.enabled,"deliberate reset resumes");
         int previousReads=io.reads,previousWrites=io.writes;
-        io.throwRead=true;c.cycle(in,.44,.02);check(!io.output.enabled,"SDK exception zero");
+        io.throwRead=true;c.cycle(in,.48,.02);check(!io.output.enabled,"SDK exception zero");
         check(io.reads==previousReads+1&&io.writes==previousWrites,"failed snapshot never publishes actuator request");
         DriveAssist assist=new DriveAssist(2,.3,.08);near(assist.turn(.4,1,true,true),.4,"driver rotation wins");near(assist.turn(0,1,true,true),.3,"assist power cap");near(assist.turn(0,1,false,true),0,"assist deliberate hold");
     }
@@ -200,7 +202,7 @@ public final class RobotIntegrationScenarios {
         s.update(shot(.11));s.update(shot(.22));check(s.state()==ScoringController.State.CONFIRM_EXIT,"feed timer stops and waits for exit");
         check(i.pieces().size()==2,"no inferred timed exit");s.update(shot(.43));check(s.state()==ScoringController.State.FAULT,"no exit times out");
         s=scoring(inventory(),0);in=shot(0);in.start=true;s.update(in);s.update(shot(.11));in=shot(.12);in.exit=true;s.update(in);
-        in=shot(.63);in.hiveStable=false;s.update(in);check(s.state()==ScoringController.State.FAULT,"hive reacquisition bounded");
+        in=shot(.63);in.hiveStable=false;s.update(in);check(s.state()==ScoringController.State.IDLE,"hive wait is bounded without latching a scoring fault");
         s=new ScoringController(inventory(),Arrays.asList(new ShotRecipe(BallType.POLLEN,1000,.4,.6,.1,50,.1,10,20)),
                 new ScoringController.Timing(.5,.1,.2,.1,.5,.2,0));
         in=shot(0);in.start=true;in.rangeInches=30;s.update(in);in=shot(.11);in.rangeInches=30;near(s.update(in).feeder,0,"uncalibrated target range inhibits");

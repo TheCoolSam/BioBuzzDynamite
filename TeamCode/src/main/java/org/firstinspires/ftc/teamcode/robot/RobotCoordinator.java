@@ -55,6 +55,8 @@ public final class RobotCoordinator {
     private double lastPlan=Double.NEGATIVE_INFINITY;
     private boolean entryPrevious,initialized,fault;
     private boolean driveRecovery;
+    private final HealthWatch healthWatch=new HealthWatch();
+    public HealthWatch.View healthView;
     public boolean driveRecovery() {return driveRecovery;}
     public PickupPlan plan;
     public RobotIO.Snapshot snapshot;
@@ -108,9 +110,9 @@ public final class RobotCoordinator {
         try {
             if(input.recoverDrive&&!input.enabled&&!input.shoot&&!input.intake&&!input.preSpin
                     &&input.shotRequestId==0&&input.fieldX==0&&input.fieldY==0&&input.turn==0
-                    &&(fault||snapshot!=null&&!snapshot.healthy)) {
+                    &&(fault||snapshot!=null&&!snapshot.healthy||healthView!=null&&healthView.anyLatched())) {
                 io.stop();scoring.cancel();plan=null;
-                if(io.enterDriveRecovery()) {driveRecovery=true;history.clear();hive.reset();turret.reset();}
+                if(io.enterDriveRecovery()) {driveRecovery=true;healthWatch.reset();history.clear();hive.reset();turret.reset();}
                 else reason="DRIVE RECOVERY REFUSED: MEASURED DRIVE / CONFIRMED STOP REQUIRED";
             }
             if(driveRecovery) {
@@ -126,17 +128,30 @@ public final class RobotCoordinator {
             }
             long readStarted=System.nanoTime();
             try {snapshot=io.read(now,dt);}finally {readSeconds=(System.nanoTime()-readStarted)*1e-9;}
-            if(snapshot!=null&&!snapshot.health.inventory)inventory.markUncertain();
-            if(snapshot==null||snapshot.robot==null||!snapshot.robot.isFresh(now,.2)||!snapshot.healthy
-                    ||!TurretEncoderSample.validDt(dt)||!Double.isFinite(snapshot.acquiredSec)
-                    ||now<snapshot.acquiredSec||now-snapshot.acquiredSec>.2) {
-                fault=true;reason="SENSOR / TIMING FAULT";scoring.cancel();io.stop();return;
+            boolean timingOk=snapshot!=null&&snapshot.robot!=null&&snapshot.robot.isFresh(now,.2)
+                    &&TurretEncoderSample.validDt(dt)&&Double.isFinite(snapshot.acquiredSec)
+                    &&now>=snapshot.acquiredSec&&now-snapshot.acquiredSec<=.2;
+            healthView=healthWatch.update(snapshot==null?null:snapshot.health,timingOk);
+            if(healthView.inventoryLatched)inventory.markUncertain();
+            boolean latch=healthView.driveLatched||healthView.timingLatched;
+            boolean resetChord=input.resetFault&&!input.enabled&&!input.shoot&&!input.intake&&input.fieldX==0&&input.fieldY==0&&input.turn==0&&inventory.isConfirmed();
+            if((fault||latch)&&resetChord&&timingOk&&snapshot!=null&&snapshot.health.drive) {
+                fault=false;healthWatch.reset();
+                healthView=healthWatch.update(snapshot.health,true);
+            } else if(latch) {
+                fault=true;reason=healthView.reason;scoring.cancel();io.stop();return;
+            }
+            if(!healthView.driveCommandable) {
+                reason=healthView.reason;io.stop();return;
+            }
+            if(snapshot==null||snapshot.robot==null) {
+                reason="SENSOR / TIMING FAULT";io.stop();return;
             }
             if(generation!=Long.MIN_VALUE&&snapshot.robot.getResetGeneration()<generation) {
                 fault=true;reason="OLD LOCALIZATION GENERATION";scoring.cancel();io.stop();return;
             }
             if(generation!=snapshot.robot.getResetGeneration())localizationReset(now,snapshot.robot.getResetGeneration());
-            history.add(snapshot.robot);
+            if(healthView.localizationTrusted)history.add(snapshot.robot);
             if(fault) {
                 if(input.resetFault&&!input.enabled&&!input.shoot&&!input.intake&&input.fieldX==0&&input.fieldY==0&&input.turn==0&&inventory.isConfirmed())fault=false;
                 reason="FAULT: RELEASE ENABLE AND RESET";io.stop();return;
@@ -158,7 +173,7 @@ public final class RobotCoordinator {
             PieceTrackingResult tracked=tracker==null?null:tracker.update(snapshot.pieces,history,now);
             if(inventoryRevision!=inventory.revision()) {plan=null;inventoryRevision=inventory.revision();}
             if(input.cancel)plan=null;
-            if(planner!=null&&now-lastPlan>=.1) {
+            if(planner!=null&&healthView.localizationTrusted&&now-lastPlan>=.1) {
                 long planStarted=System.nanoTime();
                 try {plan=planner.plan(snapshot.robot,inventory.load(),tracked.getPieces(),now,plan);lastPlan=now;}
                 finally {planSeconds=(System.nanoTime()-planStarted)*1e-9;}
@@ -208,12 +223,17 @@ public final class RobotCoordinator {
                     aimY=pivot.getFieldY()+shotSolution.equivalentRange*Math.sin(bearingNow);
                 }
             }
-            TurretCommand aim=targetFresh?turret.calculate(TurretStateAdapter.toTurretState(pivot,
+            TurretCommand aim=targetFresh&&healthView.yawCommandable?turret.calculate(TurretStateAdapter.toTurretState(pivot,
                     snapshot.turretAngle,snapshot.turretVelocity,aimX,aimY,dt,now)):null;
-            if(!targetFresh)turret.reset();
+            if(!targetFresh||!healthView.yawCommandable)turret.reset();
+            boolean scoringRelease=releasing||before==ScoringController.State.REVERSE;
+            boolean scoringHealthy=(healthView.launcherCommandable||!healthView.launcherLatched&&!scoringRelease)
+                    &&(healthView.inventoryTrusted||!healthView.inventoryLatched&&!scoringRelease)
+                    &&(healthView.timingOk||!healthView.timingLatched&&!scoringRelease);
             ScoringController.Input shot=new ScoringController.Input();
-            shot.nowSec=now;shot.acquiredSec=snapshot.acquiredSec;shot.healthy=snapshot.healthy;
-            shot.enabled=input.enabled;shot.start=input.shoot;shot.cancel=input.cancel||input.cancelShot||input.mechanismsInhibited;
+            shot.nowSec=now;shot.acquiredSec=snapshot.acquiredSec;shot.healthy=scoringHealthy;
+            shot.enabled=input.enabled;shot.start=input.shoot;shot.cancel=input.cancel||input.mechanismsInhibited;
+            shot.dismissWait=input.cancelShot;
             shot.requestId=input.shotRequestId;
             shot.burst=input.burst;shot.preSpin=input.preSpin;shot.launcher=snapshot.launcher;
             shot.targetHeight=targetFresh?snapshot.target.z:Double.NaN;
@@ -224,7 +244,8 @@ public final class RobotCoordinator {
             shot.hiveObservedSec=shot.targetObservedSec;
             shot.targetId=targetFresh?snapshot.target.targetId:Integer.MIN_VALUE;
             shot.rangeInches=targetFresh?Math.hypot(snapshot.target.x-pivot.getFieldX(),snapshot.target.y-pivot.getFieldY()):Double.NaN;
-            shot.aimReady=aim!=null&&aim.tracking&&aim.targetReachable
+            shot.aimReady=aim!=null&&aim.tracking&&aim.targetReachable&&healthView.yawCommandable
+                    &&healthView.launcherCommandable&&healthView.localizationTrusted
                     &&Math.abs(AngleUtil.wrapRadians(aim.targetBearing-snapshot.robot.getHeadingRad()-snapshot.turretAngle))<=aimTolerance;
             if(scoringPoses!=null) {
                 ShotSetupPlan setup=scoringPoses.select(snapshot.robot.getFieldX(),snapshot.robot.getFieldY(),snapshot.robot.getHeadingRad(),inventory.load());
@@ -294,22 +315,30 @@ public final class RobotCoordinator {
             }
             if(input.enabled&&!input.cancel) {
                 command.enabled=true;command.fieldX=input.fieldX;command.fieldY=input.fieldY;
-                command.turn=assist.turn(input.turn,aim==null?0:aim.requestedChassisOmega,input.unwindAssist,true);
-                command.turretPower=aim==null?0:aim.turretMotorPower;
+                command.turn=assist.turn(input.turn,aim==null||!healthView.yawCommandable?0:aim.requestedChassisOmega,
+                        input.unwindAssist&&healthView.yawCommandable,true);
+                command.turretPower=!healthView.yawCommandable||aim==null?0:aim.turretMotorPower;
                 command.acquiredSec=now;
                 ShotRecipe commanded=scoring.currentRecipe();
-                if(commanded!=null&&commanded.physical()) {command.pitchRad=commanded.pitchRad;command.gapMm=commanded.gapMm;}
-                command.rpm=output.rpm;command.hood=output.hood;command.compression=output.compression;
-                command.transfer=output.transfer;command.feeder=output.feeder;
-                command.intake=input.intake&&inventory.canIntake()&&(scoring.state()==ScoringController.State.IDLE
+                if(commanded!=null&&commanded.physical()&&healthView.launcherCommandable) {command.pitchRad=commanded.pitchRad;command.gapMm=commanded.gapMm;}
+                command.rpm=healthView.launcherCommandable?output.rpm:0;
+                command.hood=healthView.launcherCommandable?output.hood:Double.NaN;
+                command.compression=healthView.launcherCommandable?output.compression:Double.NaN;
+                command.transfer=healthView.launcherCommandable?output.transfer:0;
+                command.feeder=healthView.launcherCommandable?output.feeder:0;
+                boolean scoringAllowsIntake=scoring.state()==ScoringController.State.IDLE
+                        ||scoring.state()==ScoringController.State.WAIT_FOR_HIVE
                         ||(feedStagesIsolated&&scoring.state()!=ScoringController.State.FAULT
-                            &&scoring.state()!=ScoringController.State.REVERSE))?intakePower:0;
+                            &&scoring.state()!=ScoringController.State.REVERSE);
+                command.intake=input.intake&&inventory.canIntake()&&healthView.inventoryTrusted&&scoringAllowsIntake?intakePower:0;
                 if(input.mechanismsInhibited) {
                     command.turretPower=command.rpm=command.intake=command.transfer=command.feeder=0;
                     command.hood=command.compression=command.pitchRad=command.gapMm=Double.NaN;
                 }
             }
-            command.reason=reason=output.reason+(movingShots!=null&&!shot.motionReady||stationaryShots!=null&&!shot.stationary?"; "+shotConfidence:"");
+            command.reason=reason=output.reason
+                    +(movingShots!=null&&!shot.motionReady||stationaryShots!=null&&!shot.stationary?"; "+shotConfidence:"")
+                    +(healthView!=null&&!"HEALTHY".equals(healthView.reason)?"; "+healthView.reason:"");
             long writeStarted=System.nanoTime();
             try {io.write(command);}finally {writeSeconds=(System.nanoTime()-writeStarted)*1e-9;}
             if(journal!=null)journal.record(now,scoring.state(),snapshot,command,scoring.currentRecipe(),shotSolution,
