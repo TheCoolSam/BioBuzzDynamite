@@ -119,8 +119,9 @@ public class TurretController {
         if (!choice.reachable || desired != choice.angleRad
                 || (desired >= profile.OPERATING_MAX_RAD && desiredVelocity > 0)
                 || (desired <= profile.OPERATING_MIN_RAD && desiredVelocity < 0)) desiredVelocity = 0;
-        if (profile.measured) desiredVelocity=referenceVelocity;
-        if (profile.measured) errorRate=desiredVelocity-state.turretVelocity;
+        double kinematicFeedforward = desiredVelocity;
+        if (profile.measured) desiredVelocity = referenceVelocity + kinematicFeedforward;
+        if (profile.measured) errorRate = desiredVelocity - state.turretVelocity;
 
         double power = (profile.KP * error)
                 + (profile.KD * errorRate)

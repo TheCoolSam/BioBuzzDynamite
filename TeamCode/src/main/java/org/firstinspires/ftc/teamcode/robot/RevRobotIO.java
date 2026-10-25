@@ -143,6 +143,11 @@ public final class RevRobotIO implements RobotIO {
         TargetEstimate aim=null;
         try {aim=target.read(now,history,turretHistory,robot.getResetGeneration());}catch(RuntimeException visionFailure) {target.reset();}
         lastDt=dt;
+        List<org.firstinspires.ftc.teamcode.vision.pieces.PieceObservation> floorObs =
+                floor==null||!floor.healthy()?Collections.<org.firstinspires.ftc.teamcode.vision.pieces.PieceObservation>emptyList():floor.latest();
+        if(settings.entryClassifier instanceof org.firstinspires.ftc.teamcode.vision.pieces.HuskyLensEntryClassifier) {
+            ((org.firstinspires.ftc.teamcode.vision.pieces.HuskyLensEntryClassifier)settings.entryClassifier).updateObservations(floorObs);
+        }
         boolean entryBlocked=false,staged=false,exited=false,inventoryHealthy=true;
         org.firstinspires.ftc.teamcode.planning.pickup.BallType type=null;
         try {
@@ -160,7 +165,7 @@ public final class RevRobotIO implements RobotIO {
         healthy=health.allHealthy();
         return new Snapshot(robot,now,turret.getAngleRad(),turret.getVelocityRadPerSec(),rpm,health,
                 entryBlocked,staged,exited,type,aim,
-                floor==null||!floor.healthy()?Collections.<org.firstinspires.ftc.teamcode.vision.pieces.PieceObservation>emptyList():floor.latest(),
+                floorObs,
                 launcher);
     }
     @Override public void write(Command command) {

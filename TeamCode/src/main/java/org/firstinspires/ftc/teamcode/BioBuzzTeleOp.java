@@ -77,6 +77,7 @@ public class BioBuzzTeleOp extends OpMode {
                 robot.setFeedStagesIsolated(settings.feedStagesIsolated);
                 robot.setIntakePower(settings.intakePower);
                 robot.setTurretPivot(settings.camera.pivotForward(), settings.camera.pivotLeft());
+                robot.setTargetMaxAgeSec(settings.hiveMaxAgeSec);
                 if (settings.shotTable == null) {
                     robot.setScoringPoses(settings.shots, settings.scoringPositionTolerance, settings.scoringHeadingTolerance);
                 }

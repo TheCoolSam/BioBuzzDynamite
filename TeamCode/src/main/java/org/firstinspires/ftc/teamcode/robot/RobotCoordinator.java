@@ -47,6 +47,11 @@ public final class RobotCoordinator {
     public MotionShotSolver.Solution shotSolution;
     public double shotMissBoundInches=Double.NaN;
     public String shotConfidence="STATIONARY SHOTS";
+    private TargetEstimate persistentTarget;
+    private double targetMaxAgeSec = 0.5;
+    public void setTargetMaxAgeSec(double maxAgeSec) {
+        if (Double.isFinite(maxAgeSec) && maxAgeSec > 0) this.targetMaxAgeSec = maxAgeSec;
+    }
     private int targetId=Integer.MIN_VALUE;
     private double hiveFrameFloor=Double.NEGATIVE_INFINITY;
     private PreferredPoseShotSetup scoringPoses;
@@ -95,7 +100,7 @@ public final class RobotCoordinator {
                 r.getAcquisitionTimestampSec(),r.isDeviceHealthy(),r.getResetGeneration());
     }
     public void localizationReset(double now,long generation) {
-        io.stop();history.clear();if(tracker!=null)tracker.reset(now,generation);turret.reset();hive.reset();plan=null;
+        io.stop();history.clear();if(tracker!=null)tracker.reset(now,generation);turret.reset();hive.reset();plan=null;persistentTarget=null;
         stationarySince=Double.NaN;
         this.generation=generation;lastPlan=Double.NEGATIVE_INFINITY;scoring.cancel();targetId=Integer.MIN_VALUE;hiveFrameFloor=now;
         if(motionConfidence!=null)motionConfidence.reset();committedReleaseSec=Double.NaN;shotSolution=null;
@@ -178,20 +183,27 @@ public final class RobotCoordinator {
                 try {plan=planner.plan(snapshot.robot,inventory.load(),tracked.getPieces(),now,plan);lastPlan=now;}
                 finally {planSeconds=(System.nanoTime()-planStarted)*1e-9;}
             }
-            boolean targetFresh=snapshot.target!=null&&snapshot.target.fresh(now,.2,generation);
-            if(targetFresh&&targetId!=snapshot.target.targetId) {hive.reset();turret.reset();targetId=snapshot.target.targetId;}
-            if(targetFresh&&snapshot.target.exposureSec>hiveFrameFloor)hive.observe(snapshot.target.hive,snapshot.target.exposureSec,true);
+            if(snapshot.target!=null&&snapshot.target.fresh(now,targetMaxAgeSec,generation)) {
+                persistentTarget=snapshot.target;
+            } else if(persistentTarget!=null&&!persistentTarget.fresh(now,targetMaxAgeSec,generation)) {
+                persistentTarget=null;
+            }
+            TargetEstimate effectiveTarget=(snapshot.target!=null&&snapshot.target.fresh(now,targetMaxAgeSec,generation))
+                    ?snapshot.target:persistentTarget;
+            boolean targetFresh=effectiveTarget!=null;
+            if(targetFresh&&targetId!=effectiveTarget.targetId) {hive.reset();turret.reset();targetId=effectiveTarget.targetId;}
+            if(targetFresh&&effectiveTarget.exposureSec>hiveFrameFloor)hive.observe(effectiveTarget.hive,effectiveTarget.exposureSec,true);
             RobotState pivot=pivotState(snapshot.robot);
             ScoringController.State before=scoring.state();
             boolean releasing=before==ScoringController.State.FEED_ONE||before==ScoringController.State.CONFIRM_EXIT;
             if(!releasing)committedReleaseSec=Double.NaN;
             shotSolution=null;
             shotMissBoundInches=Double.NaN;
-            double aimX=targetFresh?snapshot.target.x:Double.NaN,aimY=targetFresh?snapshot.target.y:Double.NaN;
+            double aimX=targetFresh?effectiveTarget.x:Double.NaN,aimY=targetFresh?effectiveTarget.y:Double.NaN;
             if(movingShots==null&&stationaryShots!=null&&targetFresh) {
                 shotSolution=MotionShotSolver.stationary(scoring.selector(),inventory.first(),snapshot.robot,now,
                         pivotForward,pivotLeft,snapshot.turretAngle,snapshot.turretVelocity,
-                        snapshot.target.x,snapshot.target.y,snapshot.target.z,maxMotion,maxTurretRate,stationaryShots);
+                        effectiveTarget.x,effectiveTarget.y,effectiveTarget.z,maxMotion,maxTurretRate,stationaryShots);
                 if(shotSolution!=null) {
                     aimX=pivot.getFieldX()+shotSolution.equivalentRange*Math.cos(shotSolution.bearing);
                     aimY=pivot.getFieldY()+shotSolution.equivalentRange*Math.sin(shotSolution.bearing);
@@ -211,7 +223,7 @@ public final class RobotCoordinator {
                         :now+movingShots.settings.releaseDelaySec;
                 if(targetFresh)shotSolution=movingShots.solve(scoring.selector(),inventory.first(),snapshot.robot,now,releaseSec,
                         motionConfidence.ax,motionConfidence.ay,motionConfidence.alpha,pivotForward,pivotLeft,
-                        snapshot.turretAngle,snapshot.turretVelocity,snapshot.target.x,snapshot.target.y,snapshot.target.z,trusted,releasing);
+                        snapshot.turretAngle,snapshot.turretVelocity,effectiveTarget.x,effectiveTarget.y,effectiveTarget.z,trusted,releasing);
                 shotConfidence=shotSolution==null?"NO CALIBRATED MOTION SOLUTION":!turretTrusted?"TURRET MOTION OUTSIDE CALIBRATION":!trusted?motionConfidence.reason:
                         !shotSolution.confident?"PREDICTED MISS EXCEEDS BOUND":"RELEASE PREDICTION WITHIN BOUNDS";
                 if(shotSolution!=null) {
@@ -236,14 +248,14 @@ public final class RobotCoordinator {
             shot.dismissWait=input.cancelShot;
             shot.requestId=input.shotRequestId;
             shot.burst=input.burst;shot.preSpin=input.preSpin;shot.launcher=snapshot.launcher;
-            shot.targetHeight=targetFresh?snapshot.target.z:Double.NaN;
-            shot.impact=targetFresh?snapshot.target:null;shot.carried=inventory.load();
+            shot.targetHeight=targetFresh?effectiveTarget.z:Double.NaN;
+            shot.impact=targetFresh?effectiveTarget:null;shot.carried=inventory.load();
             shot.resetFault=input.resetFault&&!input.enabled&&!input.shoot&&!input.intake&&input.fieldX==0&&input.fieldY==0&&input.turn==0;
             shot.staged=snapshot.staged;shot.exit=snapshot.exit;shot.rpm=snapshot.rpm;
-            shot.targetFresh=targetFresh;shot.targetObservedSec=targetFresh?snapshot.target.exposureSec:Double.NaN;
+            shot.targetFresh=targetFresh;shot.targetObservedSec=targetFresh?effectiveTarget.exposureSec:Double.NaN;
             shot.hiveObservedSec=shot.targetObservedSec;
-            shot.targetId=targetFresh?snapshot.target.targetId:Integer.MIN_VALUE;
-            shot.rangeInches=targetFresh?Math.hypot(snapshot.target.x-pivot.getFieldX(),snapshot.target.y-pivot.getFieldY()):Double.NaN;
+            shot.targetId=targetFresh?effectiveTarget.targetId:Integer.MIN_VALUE;
+            shot.rangeInches=targetFresh?Math.hypot(effectiveTarget.x-pivot.getFieldX(),effectiveTarget.y-pivot.getFieldY()):Double.NaN;
             shot.aimReady=aim!=null&&aim.tracking&&aim.targetReachable&&healthView.yawCommandable
                     &&healthView.launcherCommandable&&healthView.localizationTrusted
                     &&Math.abs(AngleUtil.wrapRadians(aim.targetBearing-snapshot.robot.getHeadingRad()-snapshot.turretAngle))<=aimTolerance;
@@ -268,7 +280,7 @@ public final class RobotCoordinator {
                     shot.releaseUncertaintySec=shotSolution.selection.releaseUncertaintySec;
                     double error=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-snapshot.robot.getHeadingRad()-snapshot.turretAngle));
                     shotMissBoundInches+=shot.rangeInches*Math.sin(Math.min(Math.PI/2,error));
-                    shot.stationary &= shotMissBoundInches<=Math.min(stationaryShots.maxMiss,snapshot.target.lipClearance);
+                    shot.stationary &= shotMissBoundInches<=Math.min(stationaryShots.maxMiss,effectiveTarget.lipClearance);
                     shot.aimReady &= error<=aimTolerance;
                 }else shot.aimReady=false;
             }
@@ -286,7 +298,7 @@ public final class RobotCoordinator {
                     double physicalBearing=shotSolution.releaseHeading+futureTurret;
                     double aimError=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-physicalBearing));
                     shotMissBoundInches+=shotSolution.equivalentRange*Math.sin(Math.min(Math.PI/2,aimError));
-                    double allowedMiss=snapshot.target.internalPoint?Math.min(movingShots.settings.maxMissInches,snapshot.target.lipClearance):movingShots.settings.maxMissInches;
+                    double allowedMiss=effectiveTarget.internalPoint?Math.min(movingShots.settings.maxMissInches,effectiveTarget.lipClearance):movingShots.settings.maxMissInches;
                     if(shot.motionReady&&(!Double.isFinite(allowedMiss)||shotMissBoundInches>allowedMiss)) {
                         shot.motionReady=false;shotConfidence="AIM ERROR EXCEEDS MISS BOUND";
                     }

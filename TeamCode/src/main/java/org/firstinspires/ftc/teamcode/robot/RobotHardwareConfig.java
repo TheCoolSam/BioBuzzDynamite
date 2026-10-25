@@ -122,12 +122,7 @@ public final class RobotHardwareConfig {
         s.cellClassifier = (fiducial) -> HiveTracker.State.SIDE_A_UP;
         s.cameraPipeline = 0;
         s.allianceCellIds = new int[]{1, 2};
-        s.entryClassifier = new EntryClassifier() {
-            @Override
-            public BallType classify() {
-                return BallType.POLLEN;
-            }
-        };
+        s.entryClassifier = new HuskyLensEntryClassifier(s.pieces, 140.0);
 
         s.recoveryDrive = DriveHardwareConfig.measured();
 
