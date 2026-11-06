@@ -46,6 +46,8 @@ public final class RevRobotIO implements RobotIO {
     private RevBasicDrive recoveryDrive;
     private boolean recovering;
     private final HubBulkCache bulk;
+    private boolean lastPinpointHealthy = false;
+    private double lastPinpointCheckSec = Double.NEGATIVE_INFINITY;
     public RevRobotIO(HardwareMap map,RobotHardwareConfig.Settings settings,long epochNanos) {
         if(settings==null)throw new IllegalStateException("Hardware configuration undecided");
         settings.validate();this.settings=settings;
@@ -117,7 +119,11 @@ public final class RevRobotIO implements RobotIO {
         if(fault)throw new IllegalStateException("Latched hardware fault; reinitialize OpMode");
         if(!TurretEncoderSample.validDt(dt)) {stop();healthy=false;}
         try {follower.update();}catch(RuntimeException failure){fault=true;stop();throw failure;}
-        boolean odometryHealthy=pinpoint.getDeviceStatus()==GoBildaPinpointDriver.DeviceStatus.READY;
+        if (now - lastPinpointCheckSec >= 0.25 || !lastPinpointHealthy) {
+            lastPinpointHealthy = pinpoint.getDeviceStatus() == GoBildaPinpointDriver.DeviceStatus.READY;
+            lastPinpointCheckSec = now;
+        }
+        boolean odometryHealthy = lastPinpointHealthy;
         source.capture(now,odometryHealthy);
         RobotState robot=estimator.update(source,now);
         turret.read(dt);
@@ -188,14 +194,19 @@ public final class RevRobotIO implements RobotIO {
                     ||Math.abs(command.hood-hoodCommand)>1e-8||Math.abs(command.compression-gapCommand)>1e-8) {
                 fault=true;stop();throw new IllegalStateException("Launcher commands outside calibrated physical map");
             }
-            if(command.feeder>0&&(!launcher.fresh(command.acquiredSec+age,settings.launcherLimits.maxAge)
-                    ||!Double.isFinite(launcher.pitchRad)||!Double.isFinite(launcher.pitchVelocity)
-                    ||!Double.isFinite(launcher.gapMm)||!Double.isFinite(launcher.gapVelocity)
-                    ||Math.abs(launcher.pitchRad-command.pitchRad)>settings.launcherLimits.pitchError
-                    ||Math.abs(launcher.pitchVelocity)>settings.launcherLimits.pitchRate
-                    ||Math.abs(launcher.gapMm-command.gapMm)>settings.launcherLimits.gapError
-                    ||Math.abs(launcher.gapVelocity)>settings.launcherLimits.gapRate)) {
-                fault=true;stop();throw new IllegalStateException("Final measured launcher feed interlock");
+            if (command.feeder > 0) {
+                boolean launcherFeedSafe = launcher != null
+                        && launcher.fresh(command.acquiredSec + age, settings.launcherLimits.maxAge)
+                        && Double.isFinite(launcher.pitchRad) && Double.isFinite(launcher.pitchVelocity)
+                        && Double.isFinite(launcher.gapMm) && Double.isFinite(launcher.gapVelocity)
+                        && Math.abs(launcher.pitchRad - command.pitchRad) <= settings.launcherLimits.pitchError
+                        && Math.abs(launcher.pitchVelocity) <= settings.launcherLimits.pitchRate
+                        && Math.abs(launcher.gapMm - command.gapMm) <= settings.launcherLimits.gapError
+                        && Math.abs(launcher.gapVelocity) <= settings.launcherLimits.gapRate;
+                if (!launcherFeedSafe) {
+                    // Fail-soft: inhibit feeder motor to avoid misfire without killing the OpMode
+                    command.feeder = 0;
+                }
             }
         }
         try {

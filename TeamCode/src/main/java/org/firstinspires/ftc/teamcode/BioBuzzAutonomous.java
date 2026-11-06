@@ -43,4 +43,19 @@ public final class BioBuzzAutonomous extends BioBuzzTeleOp {
         return input;
     }
     @Override protected void display() {super.display();telemetry.addData("Autonomous",autoReason);}
+
+    @Override
+    public void stop() {
+        if (robot != null && robot.snapshot != null && robot.snapshot.robot != null && robot.snapshot.robot.isPoseValid()) {
+            com.pedropathing.math.Pose finalPose = new com.pedropathing.math.Pose(
+                    robot.snapshot.robot.getFieldX(),
+                    robot.snapshot.robot.getFieldY(),
+                    robot.snapshot.robot.getHeadingRad()
+            );
+            java.util.List<org.firstinspires.ftc.teamcode.planning.pickup.BallType> carried =
+                    robot.inventory != null ? robot.inventory.pieces() : null;
+            org.firstinspires.ftc.teamcode.state.PoseStorage.save(finalPose, carried);
+        }
+        super.stop();
+    }
 }

@@ -8,6 +8,8 @@ import org.firstinspires.ftc.teamcode.turret.*;
 import org.firstinspires.ftc.teamcode.vision.pieces.*;
 import org.firstinspires.ftc.teamcode.planning.pickup.*;
 import org.firstinspires.ftc.teamcode.match.AllianceColor;
+import org.firstinspires.ftc.teamcode.state.PoseStorage;
+import com.pedropathing.math.Pose;
 import java.util.*;
 
 /**
@@ -16,6 +18,12 @@ import java.util.*;
  */
 @TeleOp(name = "BIOBUZZ TeleOp", group = "Competition")
 public class BioBuzzTeleOp extends OpMode {
+    public static final int MAX_INVENTORY_CAPACITY = 4;
+    public static final double SLOW_MODE_TRIGGER_THRESHOLD = 0.2;
+    public static final double SLOW_MODE_SCALE = 0.45;
+    public static final double INTAKE_TRIGGER_THRESHOLD = 0.2;
+    public static final double BURST_HOLD_DURATION_SEC = 0.25;
+
     protected RobotHardwareConfig.Settings settings;
     protected RevRobotIO io;
     protected RobotCoordinator robot;
@@ -32,6 +40,8 @@ public class BioBuzzTeleOp extends OpMode {
     private final LoopMetrics metrics = new LoopMetrics();
     private final LoopMetrics intervals = new LoopMetrics();
     private boolean previousHit, previousMiss, previousTip, previousNoTip;
+    private int previousPieceCount = 0;
+    private double lastAimRumbleTime = 0;
 
     protected RobotHardwareConfig.Settings loadSettings() {
         return RobotHardwareConfig.measured();
@@ -53,8 +63,12 @@ public class BioBuzzTeleOp extends OpMode {
                 }
                 settings.validate();
                 io = new RevRobotIO(hardwareMap, settings, epochNanos);
-                PieceInventory inventory = new PieceInventory(4);
-                inventory.reconcile(settings.confirmedPreload);
+                PieceInventory inventory = new PieceInventory(MAX_INVENTORY_CAPACITY);
+                List<BallType> preload = settings.confirmedPreload;
+                if (PoseStorage.hasPose() && !PoseStorage.getInventory().isEmpty()) {
+                    preload = PoseStorage.getInventory();
+                }
+                inventory.reconcile(preload);
                 ScoringController scoring = settings.shotTable == null
                         ? new ScoringController(inventory, settings.recipes, settings.scoringTiming, settings.feedPower, settings.reversePower)
                         : new ScoringController(inventory, settings.shotTable, settings.scoringTiming, settings.feedPower, settings.reversePower, settings.burst);
@@ -118,7 +132,13 @@ public class BioBuzzTeleOp extends OpMode {
     @Override
     public void start() {
         lastNanos = System.nanoTime();
-        if (io != null) io.stop();
+        if (io != null) {
+            io.stop();
+            if (PoseStorage.hasPose()) {
+                Pose autoPose = PoseStorage.getPose();
+                io.setStartingPose(autoPose.x(), autoPose.y(), autoPose.heading());
+            }
+        }
     }
 
     protected double seconds(long nanos) {
@@ -140,7 +160,7 @@ public class BioBuzzTeleOp extends OpMode {
                         settings == null ? AllianceColor.UNKNOWN : settings.alliance);
 
         // L2 (Left Trigger): Precision slow-speed crawl mode (45% power)
-        double speedScale = gamepad1.left_trigger > 0.2 ? 0.45 : 1.0;
+        double speedScale = gamepad1.left_trigger > SLOW_MODE_TRIGGER_THRESHOLD ? SLOW_MODE_SCALE : 1.0;
         input.fieldX = sticks.fieldX * speedScale;
         input.fieldY = sticks.fieldY * speedScale;
         input.turn = sticks.turn * speedScale;
@@ -167,7 +187,7 @@ public class BioBuzzTeleOp extends OpMode {
                 shootPressStartTime = now;
             }
             input.shoot = true;
-            if (now - shootPressStartTime >= 0.25 && settings != null && settings.burst != null) {
+            if (now - shootPressStartTime >= BURST_HOLD_DURATION_SEC && settings != null && settings.burst != null) {
                 input.burst = true;
             }
         } else {
@@ -178,15 +198,19 @@ public class BioBuzzTeleOp extends OpMode {
         boolean holdingPieces = robot != null && robot.inventory != null && !robot.inventory.pieces().isEmpty();
         input.preSpin = holdingPieces || gamepad2.left_bumper;
 
-        // Intake: R2 (Right Trigger) or manual LT. Auto-stops when inventory is full (4 balls)
-        boolean full = robot != null && robot.inventory != null && robot.inventory.pieces().size() >= 4;
-        input.intake = (gamepad1.right_trigger > 0.2 || gamepad1.left_trigger > 0.5) && !full;
-
-        // Manual Unwind Assist on D-pad right
-        input.unwindAssist = gamepad1.dpad_right;
-
         // Hands-off Auto-Pickup Assist: L1 (Left Bumper) or Square (X)
         boolean holdPickup = gamepad1.left_bumper || gamepad1.x;
+
+        // Intake: R2 (Right Trigger) or manual LT. Auto-stops when inventory is full
+        boolean full = robot != null && robot.inventory != null && robot.inventory.pieces().size() >= MAX_INVENTORY_CAPACITY;
+        input.intake = (gamepad1.right_trigger > INTAKE_TRIGGER_THRESHOLD || gamepad1.left_trigger > 0.5) && !full;
+
+        // Smart auto-unwind when idle or moving without an active shot, plus manual D-pad right
+        boolean shouldAutoUnwind = robot != null && robot.snapshot != null
+                && Math.abs(robot.snapshot.turretAngle) > 2.0
+                && !input.shoot && !input.intake && !holdPickup
+                && robot.scoring.state() == ScoringController.State.IDLE;
+        input.unwindAssist = gamepad1.dpad_right || shouldAutoUnwind;
         if (!holdPickup || !input.enabled || input.cancel || input.shoot || robot == null
                 || !robot.inventory.isConfirmed() || robot.driveRecovery()
                 || robot.scoring.state() != ScoringController.State.IDLE) {
@@ -227,6 +251,28 @@ public class BioBuzzTeleOp extends OpMode {
             recoverInventory(command);
             robot.cycle(command, seconds(now), dt);
             annotateOutcome(seconds(now));
+
+            // Gamepad 1 Haptic Feedback
+            if (robot.inventory != null) {
+                int currentCount = robot.inventory.pieces().size();
+                if (currentCount > previousPieceCount) {
+                    if (currentCount >= MAX_INVENTORY_CAPACITY) {
+                        gamepad1.rumbleBlips(2);
+                    } else {
+                        gamepad1.rumbleBlips(1);
+                    }
+                }
+                previousPieceCount = currentCount;
+            }
+
+            if (robot.scoring != null) {
+                boolean aimLocked = robot.scoring.pitchReady && robot.scoring.compressionReady
+                        && robot.scoring.rpmReady && robot.shotSolution != null && robot.shotSolution.confident;
+                if (aimLocked && seconds(now) - lastAimRumbleTime >= 0.6) {
+                    gamepad1.rumble(0.25, 0.25, 120);
+                    lastAimRumbleTime = seconds(now);
+                }
+            }
         }
 
         if (robot != null && robot.journal != null) {
@@ -274,8 +320,8 @@ public class BioBuzzTeleOp extends OpMode {
             io.stop();
             if (clear && !previousClear) recoveryDraft.clear();
             if (undo && !previousUndo && !recoveryDraft.isEmpty()) recoveryDraft.remove(recoveryDraft.size() - 1);
-            if (pollen && !previousPollen && recoveryDraft.size() < 4) recoveryDraft.add(BallType.POLLEN);
-            if (nectar && !previousNectar && recoveryDraft.size() < 4) recoveryDraft.add(BallType.NECTAR);
+            if (pollen && !previousPollen && recoveryDraft.size() < MAX_INVENTORY_CAPACITY) recoveryDraft.add(BallType.POLLEN);
+            if (nectar && !previousNectar && recoveryDraft.size() < MAX_INVENTORY_CAPACITY) recoveryDraft.add(BallType.NECTAR);
             if (commit && !previousCommit) robot.inventory.reconcile(recoveryDraft);
         }
         previousPollen = pollen;
@@ -292,6 +338,7 @@ public class BioBuzzTeleOp extends OpMode {
             return;
         }
 
+        telemetry.addData("Auto Pose Handoff", PoseStorage.hasPose() ? "ACTIVE" : "STANDBY");
         telemetry.addData("Scoring", robot.scoring.state());
         telemetry.addData("Inventory", robot.inventory.load());
         telemetry.addData("Subsystem Health", robot.snapshot == null ? "AWAITING SAMPLE" : robot.snapshot.health);
