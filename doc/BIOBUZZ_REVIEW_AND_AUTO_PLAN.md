@@ -47,7 +47,9 @@ Java, that's fine, but anything you want to test before comp needs a drive path.
    then write those into the table.
 4. **Pedro is not configured at all.** All four motor directions are `FORWARD`, pod offsets are `0`,
    max speed is `1 in/s`, feedback gains are `0`. This is fine as a placeholder but means no path
-   following. Details in section 3.
+   following. The repo had Pedro's AutoTune library but none of its tuner procedures; they are now wired
+   in (`pedro/Tuning.java`), so tuning is a guided web procedure, not hand work. See
+   `doc/PEDRO_AUTOTUNE_GUIDE.md`.
 
 ### P1. Make it easier to test piece by piece
 
@@ -87,9 +89,10 @@ five times in a row.**
   `PedroConstants`, and confirm that stick-forward drives forward.
 - If you use the goBILDA Pinpoint: measure the two pod offsets from the robot's center, set them in
   `PedroConstants`, and set the encoder directions.
-- Then run Pedro's tuners (localizer, then velocity/deceleration, then translational/heading PIDs).
-  Until this is done, `FixedRouteAuto`'s plain P-controller is the only path follower you have, and it
-  has no deceleration limits.
+- Then run Pedro's **AutoTune** (web page on the robot; it measures and prints the config for you): see
+  `doc/PEDRO_AUTOTUNE_GUIDE.md`. Until this is done, `FixedRouteAuto`'s plain P-controller is the only path
+  follower you have, and it has no deceleration limits. For something that can run now without Pedro,
+  see `doc/SIMPLE_AUTO_GUIDE.md`.
 
 **Tier 1: Leave the starting zone (points almost every match).**
 Drive straight off the line and park. This only needs the drive working. Time it, add a safety margin,

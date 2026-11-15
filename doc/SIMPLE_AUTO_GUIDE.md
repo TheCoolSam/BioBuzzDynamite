@@ -63,14 +63,36 @@ next INIT**; OPTIONS is what makes them stick.
 
 The defaults (left side reversed) are a guess for a typical mecanum build. Don't trust them.
 
-### 2. Mechanism directions (on blocks, flywheel guard on)
+### 2. Heading hold (optional, recommended once verified)
+
+Drive legs are timed, so a long leg can crab a few degrees. The heading hold uses the Control Hub's IMU
+to nudge the robot back to straight while it drives. It is **off by default** because it is only correct
+if the IMU knows how the hub is mounted. Verify it first:
+
+1. In INIT the screen shows `IMU ... yaw N deg`. If it says `no device named "imu"`, the Robot
+   Configuration needs an IMU named `imu` (the usual built-in one).
+2. Turn the robot **counterclockwise by hand** (seen from above). The yaw number must **increase**.
+   If it decreases or doesn't change, the mounting numbers are wrong: set `IMU_LOGO_FACING` and
+   `IMU_USB_FACING` to where the hub's logo and its USB ports actually face
+   (0 up, 1 down, 2 forward, 3 backward, 4 left, 5 right; the two must be different, perpendicular directions).
+   Changing them re-initialises the IMU; repeat until yaw increases counterclockwise.
+3. Tick `HEADING_HOLD`. Run route 0 with a longer leg. Nudge the robot sideways in its path while it
+   drives: it should swing back to straight, not away. If it turns the wrong way, tick `REVERSE_HEADING`.
+4. Press OPTIONS to save.
+
+Safety built in: the correction is capped (`HEADING_MAX`), and if the heading error ever exceeds
+`HEADING_FAULT_DEG` (20 degrees) the hold switches itself off for the rest of the run and the screen says
+why. So a wrong sign or a wrong orientation cannot make the robot spin. The robot still drives the leg,
+just without the hold. The hold only acts while driving, not while shooting.
+
+### 3. Mechanism directions (on blocks, flywheel guard on)
 
 The auto turns these on during a shot or a pickup. A wrong direction is the most likely first failure:
 
 - `REVERSE_INTAKE`, `REVERSE_TRANSFER`, `REVERSE_FEEDER`: confirm each pushes balls the right way.
   A quick way: run route 2 with no balls and watch each motor on the feed pulse and the pickup.
 
-### 3. Drive speed (route 0, on the floor, small space)
+### 4. Drive speed (route 0, on the floor, small space)
 
 The auto turns inches into time using two speeds, `IN_PER_SEC_FORWARD` and `IN_PER_SEC_STRAFE`
 (inches per second at `DRIVE_POWER`). The defaults are guesses.
@@ -86,7 +108,7 @@ The auto turns inches into time using two speeds, `IN_PER_SEC_FORWARD` and `IN_P
 Dead reckoning drifts. Slip, a bumped wall or a different battery moves the robot a few inches, and it
 never knows. Aim to reach a spot you can **square against a wall or tile edge** and keep legs short.
 
-### 4. The shot
+### 5. The shot
 
 1. Choose where to shoot from. Put the robot there by hand and fire a few balls from the bench tuner / TeleOp to find a working hood and rpm. Save it in the bench tuner.
 2. Measure how far the robot has to drive from its start to that spot. Put it in `SHOT_MOVE_FORWARD_IN` / `SHOT_MOVE_STRAFE_IN`. (0 and 0 means shoot from the start.)
@@ -104,13 +126,13 @@ never knows. Aim to reach a spot you can **square against a wall or tile edge** 
 If the encoder isn't working you'll see `NO ENCODER SIGNAL: using timer`. The auto then waits
 `TIMED_SPINUP_SEC` and keeps going. Fix the encoder when you can.
 
-### 5. Pickup (route 2)
+### 6. Pickup (route 2)
 
 - `PICKUP_FORWARD_IN` / `PICKUP_STRAFE_IN` is how far to drive out with the intake on, and it retraces the same path back. Measure from the shot spot to the balls.
 - `PICKUP_SETTLE_SEC` is a short pause at the far end for the last ball to get in.
 - Do route 2 only after route 1 works five times in a row.
 
-### 6. Park
+### 7. Park
 
 `PARK_FORWARD_IN` / `PARK_STRAFE_IN` is where the robot finishes. This leg runs even if time is short. Measure it from the shot spot.
 
@@ -127,19 +149,19 @@ If the encoder isn't working you'll see `NO ENCODER SIGNAL: using timer`. The au
 
 ## Order to bring it up
 
-1. Wheel directions (step 1).
-2. Route 0 with a measured speed (step 3). **This alone is worth points. Do it first.**
-3. Mechanism directions (step 2).
+1. Wheel directions (step 1). The Pedro Mecanum Tuner (`doc/PEDRO_AUTOTUNE_GUIDE.md`) also finds these for you.
+2. Route 0 with a measured speed (step 4). **This alone is worth points. Do it first.**
+3. Mechanism directions (step 3), and the heading hold (step 2) once the IMU checks out.
 4. Route 1 with the shot from the start position (shot move 0, 0). Then add a shot move if you need one.
 5. Route 2.
 6. Save, then run each route with the Red and the Blue alliance.
 
 ## Known limits
 
-- **No heading correction.** Drive legs are timed with no IMU or odometry, so the robot can crab a few degrees on a long leg. Keep legs short, or add the IMU hold later.
+- **Heading hold is not position control.** It keeps the robot pointed straight; it cannot tell if it is a few inches off sideways. Slip and battery voltage still move the robot. Keep legs short.
 - **No ball sensing.** It feeds a fixed number of pulses. If a ball jams or the magazine is short, it doesn't know.
 - **Turret stays where it is.** Point it where you want before START (centre or fixed angle). The auto does not move it.
 - **One compression/hood setting.** It uses the pollen setting from the bench file for every ball.
 - It can't see the other robots or the field. If an alliance partner is in your path, it will push into them. Use `START_DELAY_SEC` and route choice to coordinate.
-- Once Pedro is tuned (see `doc/BIOBUZZ_REVIEW_AND_AUTO_PLAN.md`), the fixed-route auto and Pedro paths are the way to
-  get precise movement. This auto is the one you can have working this week.
+- Pedro Pathing 3 tunes itself with AutoTune (see `doc/PEDRO_AUTOTUNE_GUIDE.md`). Once that is done, Pedro paths
+  are the way to get precise movement. This auto is the one you can have working this week.

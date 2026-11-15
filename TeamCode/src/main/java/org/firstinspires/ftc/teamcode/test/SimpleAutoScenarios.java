@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.test;
 
 import org.firstinspires.ftc.teamcode.auto.FlywheelReadyDetector;
+import org.firstinspires.ftc.teamcode.auto.HeadingHold;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoPlan;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoRunner;
 
@@ -106,6 +107,7 @@ public final class SimpleAutoScenarios {
         failureModes();
         deadlines();
         safetyAndSlew();
+        headingHold();
         System.out.println("SIMPLE AUTO CHECKS PASSED (" + checks + ")");
     }
 
@@ -473,6 +475,78 @@ public final class SimpleAutoScenarios {
         check(r.maxAbsDrive <= 1.0, "drive command never exceeds 1.0");
         check(r.maxPowerStep <= rp.slewPerSec * DT + 1e-9 || r.maxPowerStep == 0 || r.maxPowerStep <= 1.0,
                 "power only steps down all at once");
+    }
+
+    // ------------------------------------------------------------------------------------------ heading hold
+    private static void headingHold() {
+        HeadingHold.Config hc = new HeadingHold.Config();
+        HeadingHold h = new HeadingHold(hc);
+        check(h.correction(0) == 0, "no target set: no correction");
+        h.setTarget(0);
+        check(h.correction(0) == 0, "on target: no correction");
+        check(h.correction(0.3) == 0, "inside the deadband: no correction");
+        double ccwNeeded = h.correction(-5); // robot drifted clockwise, must turn counterclockwise
+        check(ccwNeeded > 0 && Math.abs(ccwNeeded - 5 * hc.kP) < 1e-9, "drifted clockwise: counterclockwise (positive) correction (" + ccwNeeded + ")");
+        double cwNeeded = h.correction(5);
+        check(cwNeeded < 0 && Math.abs(cwNeeded + 5 * hc.kP) < 1e-9, "drifted counterclockwise: clockwise (negative) correction");
+        check(Math.abs(h.correction(-15)) <= hc.maxCorrection + 1e-12, "correction is capped");
+        check(!h.faulted(), "no fault inside the limit");
+
+        // Wrap-around: target 170, robot at -175 (185 deg, i.e. 15 deg counterclockwise of target) -> turn clockwise.
+        HeadingHold w = new HeadingHold(new HeadingHold.Config());
+        w.setTarget(170);
+        double across = w.correction(-175);
+        check(across < 0 && Math.abs(w.lastErrorDeg() + 15) < 1e-9, "wraps across 180 the short way (error " + w.lastErrorDeg() + ")");
+        check(Math.abs(HeadingHold.wrap(540) - 180) < 1e-9 && Math.abs(HeadingHold.wrap(-190) - 170) < 1e-9, "wrap helper");
+
+        // Reversed flips the sign.
+        HeadingHold.Config rc = new HeadingHold.Config(); rc.reversed = true;
+        HeadingHold r = new HeadingHold(rc);
+        r.setTarget(0);
+        check(r.correction(-5) < 0, "reversed flips the correction sign");
+
+        // Fault latch: a big error turns the hold off for good.
+        HeadingHold f = new HeadingHold(new HeadingHold.Config());
+        f.setTarget(0);
+        check(f.correction(30) == 0 && f.faulted(), "error beyond the fault limit latches off");
+        check(f.correction(1) == 0 && f.faulted(), "stays off even when the error comes back");
+        check(f.faultReason().contains("exceeds"), "fault reason explains what happened");
+
+        // Bad readings: tolerated briefly, then latched off.
+        HeadingHold b = new HeadingHold(new HeadingHold.Config());
+        b.setTarget(0);
+        for (int i = 0; i < 10; i++) check(b.correction(Double.NaN) == 0, "unreadable heading gives zero");
+        check(!b.faulted(), "a few bad readings are tolerated");
+        check(b.correction(-3) > 0, "a good reading resumes correction");
+        for (int i = 0; i < 30; i++) b.correction(Double.NaN);
+        check(b.faulted(), "a long run of bad readings latches off");
+
+        // Bad target / config.
+        HeadingHold t = new HeadingHold(new HeadingHold.Config());
+        t.setTarget(Double.NaN);
+        check(t.correction(10) == 0, "NaN target is ignored");
+        HeadingHold.Config bad = new HeadingHold.Config(); bad.maxCorrection = 2;
+        try { new HeadingHold(bad); check(false, "maxCorrection above 1 must be refused"); }
+        catch (IllegalArgumentException expected) { check(true, "maxCorrection above 1 refused"); }
+        bad = new HeadingHold.Config(); bad.kP = Double.NaN;
+        try { new HeadingHold(bad); check(false, "NaN kP must be refused"); }
+        catch (IllegalArgumentException expected) { check(true, "NaN kP refused"); }
+
+        // Closed loop: a robot that drifts 1.5 deg per second clockwise is held near zero.
+        HeadingHold loop = new HeadingHold(new HeadingHold.Config());
+        loop.setTarget(0);
+        double heading = 0, worst = 0;
+        for (int i = 0; i < 250; i++) {
+            double yaw = loop.correction(heading);
+            // plant: constant clockwise drift, yaw command of 1.0 turns 90 deg/s counterclockwise
+            heading += (-1.5 + yaw * 90.0) * 0.02;
+            worst = Math.max(worst, Math.abs(heading));
+        }
+        check(worst < 4.0 && !loop.faulted(), "closed loop holds a drifting robot within 4 deg (worst " + worst + ")");
+        check(Math.abs(heading) < 2.0, "closed loop settles near the target (" + heading + ")");
+
+        // The same drift with no hold would reach 7.5 deg in 5 s, so the hold is doing real work.
+        check(1.5 * 5 > worst, "hold beats the uncorrected drift");
     }
 
     // ------------------------------------------------------------------------------------------ helpers

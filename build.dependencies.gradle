@@ -16,11 +16,11 @@ dependencies {
     implementation 'org.firstinspires.ftc:Vision:12.0.0'
     implementation 'androidx.appcompat:appcompat:1.2.0'
 
-    // Pedro Pathing 3.0.1, the current release. Versions match the official
-    // quickstart manual install. Tuning is present so the library resolves;
-    // this robot is not tuned.
-    implementation 'com.pedropathing:revhub:3.0.1'
-    implementation 'com.pedropathing:tuning:1.0.1'
+    // Pedro Pathing 3.0.2 + AutoTune 1.0.3, the versions the official quickstart uses.
+    // AutoTune procedures live in pedro/Tuning.java and pedro/procedures/. This robot is NOT tuned yet:
+    // see doc/PEDRO_AUTOTUNE_GUIDE.md.
+    implementation 'com.pedropathing:revhub:3.0.2'
+    implementation 'com.pedropathing:tuning:1.0.3'
 
     // FTC Dashboard for live telemetry, graph plotting, and live PIDF tuning
     implementation 'com.acmerobotics.dashboard:dashboard:0.6.0'

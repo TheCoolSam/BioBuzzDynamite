@@ -3,18 +3,22 @@ package org.firstinspires.ftc.teamcode;
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.hardware.lynx.LynxModule;
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.teamcode.auto.FlywheelReadyDetector;
+import org.firstinspires.ftc.teamcode.auto.HeadingHold;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoPlan;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoRunner;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoStorage;
@@ -90,6 +94,15 @@ public final class BioBuzzSimpleAuto extends OpMode {
     private final DashboardTunables.Flag revBL = flag("REVERSE_BACK_LEFT", true, true);
     private final DashboardTunables.Flag revFR = flag("REVERSE_FRONT_RIGHT", false, true);
     private final DashboardTunables.Flag revBR = flag("REVERSE_BACK_RIGHT", false, true);
+    // Heading hold: keeps the robot pointed straight while a leg drives. OFF until you verify the IMU (guide step 2).
+    private final DashboardTunables.Flag headingHold = flag("HEADING_HOLD", false, true);
+    private final DashboardTunables.Num headingKp = num("HEADING_KP", 0.02, true);
+    private final DashboardTunables.Num headingMax = num("HEADING_MAX", 0.20, true);
+    private final DashboardTunables.Num headingFaultDeg = num("HEADING_FAULT_DEG", 20.0, true);
+    private final DashboardTunables.Flag headingReverse = flag("REVERSE_HEADING", false, true);
+    // Control Hub mounting. Each is 0 UP, 1 DOWN, 2 FORWARD, 3 BACKWARD, 4 LEFT, 5 RIGHT.
+    private final DashboardTunables.Num imuLogo = num("IMU_LOGO_FACING", 0, true);
+    private final DashboardTunables.Num imuUsb = num("IMU_USB_FACING", 2, true);
     // Speed calibration (after a run: type what you measured, then tick APPLY, then press OPTIONS)
     private final DashboardTunables.Num measuredFwd = num("MEASURED_FORWARD_IN", 0.0, false);
     private final DashboardTunables.Num measuredStrafe = num("MEASURED_STRAFE_IN", 0.0, false);
@@ -132,6 +145,12 @@ public final class BioBuzzSimpleAuto extends OpMode {
     private DcMotor intake, transfer, feeder;
     private Servo hood, compression;
     private VoltageSensor battery;
+    private IMU imu;
+    private int imuLogoApplied = -1, imuUsbApplied = -1;
+    private String imuStatus = "not checked";
+    private HeadingHold hold;
+    private double lastHeadingDeg = Double.NaN;
+    private double lastHoldYaw;
     private final List<String> hardwareProblems = new ArrayList<String>();
 
     // ---------------------------------------------------------------- run state
@@ -211,6 +230,8 @@ public final class BioBuzzSimpleAuto extends OpMode {
         hood = servo("hood");
         compression = servo("compression");
         try { battery = hardwareMap.voltageSensor.iterator().next(); } catch (RuntimeException ignored) { }
+        try { imu = hardwareMap.get(IMU.class, "imu"); } catch (Exception e) { imu = null; imuStatus = "no device named \"imu\""; }
+        applyImuOrientation();
 
         dashStatus = dash.register();
         loopTimer.reset();
@@ -234,6 +255,7 @@ public final class BioBuzzSimpleAuto extends OpMode {
         handleSave();
 
         applyDriveDirections();
+        applyImuOrientation();
         wheelTest();
 
         SimpleAutoPlan.Config cfg = planConfig();
@@ -262,6 +284,8 @@ public final class BioBuzzSimpleAuto extends OpMode {
                 ? String.format(Locale.US, "OPEN LOOP power %.2f (ready: %s)", shotPower.v(), useEncoder.v() ? "encoder plateau" : "fixed timer")
                 : String.format(Locale.US, "VELOCITY %.0f rpm, PIDF %.2f/%.2f/%.2f/%.2f", shotRpm.v(), kP.v(), kI.v(), kD.v(), kF.v()));
         multi.addData("Hood / compression", "%.2f / %.2f (from bench file)", hoodPos.v(), compressionPos.v());
+        multi.addData("Heading hold", headingHold.v() ? "ON" : "off (verify the IMU, then tick HEADING_HOLD)");
+        multi.addData("IMU", imuStatus + (imu != null && Double.isFinite(readHeading()) ? String.format(Locale.US, " | yaw %.1f deg (turn the robot counterclockwise by hand: it must INCREASE)", lastHeadingDeg) : ""));
         multi.addLine("Wheel test (pit only, robot on blocks): hold LB + X=FL Y=FR A=BL B=BR, or RB=all forward, RT=strafe right.");
         multi.addLine("OPTIONS saves auto tuning to the Control Hub.");
         multi.addData("Saved values", storageStatus.isEmpty() ? "none loaded (code defaults)" : storageStatus);
@@ -290,6 +314,26 @@ public final class BioBuzzSimpleAuto extends OpMode {
             return;
         }
         detector = new FlywheelReadyDetector(detectorConfig());
+        hold = null;
+        if (headingHold.v()) {
+            if (imu == null || imuStatus.startsWith("ERROR") || imuStatus.startsWith("no device")) {
+                imuStatus = "HEADING HOLD REQUESTED BUT IMU UNUSABLE: driving without it";
+            } else {
+                try {
+                    HeadingHold.Config hc = new HeadingHold.Config();
+                    hc.kP = headingKp.v();
+                    hc.maxCorrection = headingMax.v();
+                    hc.faultDeg = headingFaultDeg.v();
+                    hc.reversed = headingReverse.v();
+                    hold = new HeadingHold(hc);
+                    imu.resetYaw();
+                    hold.setTarget(0);
+                } catch (RuntimeException e) {
+                    hold = null;
+                    imuStatus = "HEADING HOLD DISABLED: " + e.getMessage();
+                }
+            }
+        }
         enableServos();
         applyServoPositions();
         applyDriveDirections();
@@ -327,7 +371,11 @@ public final class BioBuzzSimpleAuto extends OpMode {
         }
 
         applyServoPositions();
-        applyDrive(cmd);
+        lastHoldYaw = 0;
+        if (hold != null && (cmd.x != 0 || cmd.y != 0)) {
+            lastHoldYaw = hold.correction(readHeading());
+        }
+        applyDrive(cmd, lastHoldYaw);
         applyFlywheel(cmd.flywheelOn);
         applyMechanisms(cmd);
 
@@ -511,6 +559,41 @@ public final class BioBuzzSimpleAuto extends OpMode {
         for (int i = 0; i < 4; i++) if (drive[i] != null) drive[i].setPower(p[i]);
     }
 
+    /** (Re)initialises the IMU when the mounting numbers change. Only in INIT; never while driving. */
+    private void applyImuOrientation() {
+        if (imu == null) return;
+        int logo = (int) Math.round(imuLogo.v());
+        int usb = (int) Math.round(imuUsb.v());
+        if (logo == imuLogoApplied && usb == imuUsbApplied) return;
+        imuLogoApplied = logo;
+        imuUsbApplied = usb;
+        try {
+            RevHubOrientationOnRobot.LogoFacingDirection[] logos = {
+                    RevHubOrientationOnRobot.LogoFacingDirection.UP, RevHubOrientationOnRobot.LogoFacingDirection.DOWN,
+                    RevHubOrientationOnRobot.LogoFacingDirection.FORWARD, RevHubOrientationOnRobot.LogoFacingDirection.BACKWARD,
+                    RevHubOrientationOnRobot.LogoFacingDirection.LEFT, RevHubOrientationOnRobot.LogoFacingDirection.RIGHT};
+            RevHubOrientationOnRobot.UsbFacingDirection[] usbs = {
+                    RevHubOrientationOnRobot.UsbFacingDirection.UP, RevHubOrientationOnRobot.UsbFacingDirection.DOWN,
+                    RevHubOrientationOnRobot.UsbFacingDirection.FORWARD, RevHubOrientationOnRobot.UsbFacingDirection.BACKWARD,
+                    RevHubOrientationOnRobot.UsbFacingDirection.LEFT, RevHubOrientationOnRobot.UsbFacingDirection.RIGHT};
+            if (logo < 0 || logo > 5 || usb < 0 || usb > 5) throw new IllegalArgumentException("IMU facing values must be 0 to 5");
+            imu.initialize(new IMU.Parameters(new RevHubOrientationOnRobot(logos[logo], usbs[usb])));
+            imuStatus = "ok (logo " + logo + ", usb " + usb + ")";
+        } catch (RuntimeException e) {
+            imuStatus = "ERROR: " + e.getMessage() + " (logo and USB must face different, perpendicular directions)";
+        }
+    }
+
+    private double readHeading() {
+        if (imu == null) return Double.NaN;
+        try {
+            lastHeadingDeg = imu.getRobotYawPitchRollAngles().getYaw(AngleUnit.DEGREES);
+        } catch (RuntimeException e) {
+            lastHeadingDeg = Double.NaN;
+        }
+        return lastHeadingDeg;
+    }
+
     private double readRpm() {
         if (flywheel == null) return 0;
         try {
@@ -522,9 +605,10 @@ public final class BioBuzzSimpleAuto extends OpMode {
         return lastRpm;
     }
 
-    private void applyDrive(SimpleAutoRunner.Command cmd) {
+    private void applyDrive(SimpleAutoRunner.Command cmd, double holdYaw) {
         double cap = Math.max(0.0, Math.min(1.0, drivePower.v()));
-        double[] p = cap > 0 ? BasicDrive.powers(cmd.x, cmd.y, cmd.yaw, cap) : null;
+        double yaw = Math.max(-1.0, Math.min(1.0, cmd.yaw + holdYaw));
+        double[] p = cap > 0 ? BasicDrive.powers(cmd.x, cmd.y, yaw, cap) : null;
         if (p == null) { stopDrive(); return; }
         for (int i = 0; i < 4; i++) if (drive[i] != null) drive[i].setPower(p[i]);
     }
@@ -618,6 +702,12 @@ public final class BioBuzzSimpleAuto extends OpMode {
             if (!lastCommand.event.isEmpty()) multi.addData("EVENT", lastCommand.event);
             multi.addData("Shots fed", "%d (%s)", runner.shotsFired(), shotLog.isEmpty() ? "none yet" : shotLog.get(shotLog.size() - 1));
             multi.addData("Drive cmd (x, y)", "%.2f, %.2f x %.2f power", lastCommand.x, lastCommand.y, drivePower.v());
+        }
+        if (hold != null) {
+            multi.addData("Heading hold", hold.faulted() ? "FAULTED, driving without it: " + hold.faultReason()
+                    : String.format(Locale.US, "ON  error %.1f deg, correction %.2f", hold.lastErrorDeg(), lastHoldYaw));
+        } else if (headingHold.v()) {
+            multi.addData("Heading hold", imuStatus);
         }
         multi.addData("Flywheel rpm", "%.0f (%s)", lastRpm, lastCommand.flywheelOn ? "ON" : "off");
         if (detector != null) {

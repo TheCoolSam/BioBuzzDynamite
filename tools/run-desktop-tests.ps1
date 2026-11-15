@@ -24,12 +24,14 @@ if (-not (Test-Path -LiteralPath $javac) -or -not (Test-Path -LiteralPath $java)
 
 New-Item -ItemType Directory -Path $classes -Force | Out-Null
 if (-not $PedroCoreJar) {
-    $pedroCache = Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/com.pedropathing/core/3.0.1'
-    $PedroCoreJar = Get-ChildItem -LiteralPath $pedroCache -Recurse -Filter 'core-3.0.1.jar' |
+    $pedroCache = Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/com.pedropathing/core'
+    $PedroCoreJar = Get-ChildItem -LiteralPath $pedroCache -Recurse -Filter 'core-*.jar' |
+        Where-Object { $_.Name -notmatch 'sources|javadoc' } |
+        Sort-Object { [version]($_.Name -replace '^core-|\.jar$', '' -replace '[^0-9.].*$', '') } -Descending |
         Select-Object -First 1 -ExpandProperty FullName
 }
 if (-not $PedroCoreJar -or -not (Test-Path -LiteralPath $PedroCoreJar)) {
-    throw 'Pedro core 3.0.1 is required. Resolve Gradle dependencies or pass -PedroCoreJar.'
+    throw 'Pedro core is required. Resolve Gradle dependencies or pass -PedroCoreJar.'
 }
 $classpath = $classes + [IO.Path]::PathSeparator + $PedroCoreJar
 $sources = @()
@@ -39,7 +41,7 @@ foreach ($package in @('math', 'match', 'planning/pickup', 'state', 'turret', 'v
         ForEach-Object FullName
 }
 # Simple Auto: only the pure-logic files. SimpleAutoStorage needs the Android SDK and is left out.
-foreach ($name in @('SimpleAutoPlan', 'SimpleAutoRunner', 'FlywheelReadyDetector')) {
+foreach ($name in @('SimpleAutoPlan', 'SimpleAutoRunner', 'FlywheelReadyDetector', 'HeadingHold')) {
     $sources += Join-Path $sourceRoot ('auto/' + $name + '.java')
 }
 foreach ($name in @('PedroManualDrive', 'PedroMappedReading', 'PedroPoseAdapter')) {

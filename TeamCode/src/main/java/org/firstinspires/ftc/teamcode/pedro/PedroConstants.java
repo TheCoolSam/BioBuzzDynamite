@@ -4,7 +4,9 @@ import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
 /**
- * Every robot-specific Pedro value lives here. None of these are measured.
+ * Names and placeholder values for the robot's Pedro setup. None of these are measured.
+ * Pedro AutoTune results are pasted into {@link PedroTuned}, which uses these as its starting
+ * placeholders. See doc/PEDRO_AUTOTUNE_GUIDE.md.
  *
  * <p>CAD has not fixed wheel size, track, gearing, motor names, motor
  * directions, or odometry pod offsets. The numbers below exist only so the
