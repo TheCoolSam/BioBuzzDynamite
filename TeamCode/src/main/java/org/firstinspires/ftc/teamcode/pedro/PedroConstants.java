@@ -25,6 +25,7 @@ public final class PedroConstants {
      * three-wheel, or three-wheel plus IMU. Turret, planner, and
      * {@link org.firstinspires.ftc.teamcode.state.RobotState} do not change.
      */
+    // Confirmed by the team: goBILDA Pinpoint with two perpendicular dead wheels.
     public static final LocalizerKind LOCALIZER = LocalizerKind.PINPOINT;
 
     /** Robot Configuration names. Replace when the drivetrain is named. */

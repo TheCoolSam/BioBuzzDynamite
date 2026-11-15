@@ -26,10 +26,13 @@ Every field in it is a placeholder today.
    procedures drive the robot quickly. Keep people clear and a hand on the Stop button.
 2. A **charged battery** you will actually use. Velocities depend on battery voltage.
 3. Your laptop on the Robot Controller's Wi-Fi (the same network used for the Dashboard).
-4. Know which localizer you have. `PedroConstants.LOCALIZER` is `PINPOINT` today, and that was never
-   confirmed. If you have something else, change it first (Pinpoint, two-wheel, three-wheel and
-   three-wheel-with-IMU are supported by the factory. OTOS and OctoQuad tuners are included, but the
-   factory does not build those localizers; ask before using them).
+4. Localizer: we use a **goBILDA Pinpoint with two perpendicular dead wheels**, so
+   `PedroConstants.LOCALIZER` stays `PINPOINT`. The Pinpoint Tuner is the one to run. In the Robot
+   Configuration the Pinpoint must be an I2C device on the Control/Expansion Hub, type
+   **goBILDA Pinpoint Odometry Computer**, named exactly `pinpoint` (`PedroConstants.PINPOINT_NAME`).
+   The Pinpoint has its own IMU, so you do not need the Hub IMU for Pedro.
+   Have these ready for the Pinpoint Tuner: the pod type (goBILDA swing-arm, goBILDA 4-bar, or custom
+   pods with their own wheel diameter and ticks per revolution), and a tape measure.
 5. Build and install the app (Android Studio, Run). The tuner procedures show up after install.
 
 Open **http://192.168.43.1:10158** in a browser. Pick a procedure from the list.
@@ -56,7 +59,7 @@ Pick the one for your hardware:
 
 | You have | Procedure | Paste over this field in `PedroTuned.java` |
 |---|---|---|
-| goBILDA Pinpoint | Pinpoint Tuner | `pinpointConfig` |
+| goBILDA Pinpoint (**this is us**) | Pinpoint Tuner | `pinpointConfig` |
 | Two dead wheels + IMU | Two Wheel Tuner | `twoWheelConfig` |
 | Three dead wheels | Three Wheel Tuner | `threeWheelConfig` |
 | Three dead wheels + IMU | Three Wheel IMU Tuner | `threeWheelImuConfig` |
