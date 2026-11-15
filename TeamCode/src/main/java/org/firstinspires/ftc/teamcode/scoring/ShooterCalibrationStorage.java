@@ -12,19 +12,32 @@ import java.util.Properties;
 /**
  * Persistent calibration storage for shooter compression, hood angle, RPM, and flywheel PIDF.
  * Saves values to Control Hub disk so tuned parameters persist across power cycles and OpModes.
+ *
+ * <p>Schema history:
+ * <ul>
+ *   <li>1 - original bench tuner. Its PIDF/RPM numbers were tuned on a wrong scale (P larger than F)
+ *       and are deliberately IGNORED on load. Hood/compression values are kept.</li>
+ *   <li>2 - current. PIDF, RPM, open-loop power and ticks-per-rev are trusted.</li>
+ * </ul>
  */
 public final class ShooterCalibrationStorage {
     public static final String FILE_NAME = "biobuzz_shooter_calibration.properties";
+    public static final int SCHEMA = 2;
 
     public static class Data {
         public double pollenCompression = 0.30;
         public double nectarCompression = 0.50;
         public double hoodPosition = 0.35;
-        public double targetRpm = 1400.0;
-        public double p = 15.0;
+        public double targetRpm = 3000.0;
+        public double openLoopPower = 0.30;
+        public double ticksPerRev = 28.0;
+        // Starting point only: F ~= 32767 / max ticks per second, P ~= 0.1 * F. Measure F on the bench.
+        public double p = 1.25;
         public double i = 0.0;
-        public double d = 0.5;
+        public double d = 0.0;
         public double f = 12.5;
+        /** True when the file on disk predates {@link #SCHEMA} and its PIDF/RPM numbers were discarded. */
+        public boolean legacyPidfDiscarded = false;
     }
 
     public static Data load() {
@@ -35,15 +48,22 @@ public final class ShooterCalibrationStorage {
                 String text = ReadWriteFile.readFile(file);
                 Properties props = new Properties();
                 props.load(new StringReader(text));
-                data.pollenCompression = Double.parseDouble(props.getProperty("pollenCompression", Double.toString(data.pollenCompression)));
-                data.nectarCompression = Double.parseDouble(props.getProperty("nectarCompression", Double.toString(data.nectarCompression)));
-                data.hoodPosition = Double.parseDouble(props.getProperty("hoodPosition", Double.toString(data.hoodPosition)));
-                data.targetRpm = Double.parseDouble(props.getProperty("targetRpm", Double.toString(data.targetRpm)));
-                data.p = Double.parseDouble(props.getProperty("p", Double.toString(data.p)));
-                data.i = Double.parseDouble(props.getProperty("i", Double.toString(data.i)));
-                data.d = Double.parseDouble(props.getProperty("d", Double.toString(data.d)));
-                data.f = Double.parseDouble(props.getProperty("f", Double.toString(data.f)));
-                RobotLog.ii("ShooterCalibration", "Loaded calibration from " + FILE_NAME);
+                int schema = (int) Double.parseDouble(props.getProperty("schema", "1"));
+                data.pollenCompression = read(props, "pollenCompression", data.pollenCompression);
+                data.nectarCompression = read(props, "nectarCompression", data.nectarCompression);
+                data.hoodPosition = read(props, "hoodPosition", data.hoodPosition);
+                if (schema >= 2) {
+                    data.targetRpm = read(props, "targetRpm", data.targetRpm);
+                    data.openLoopPower = read(props, "openLoopPower", data.openLoopPower);
+                    data.ticksPerRev = read(props, "ticksPerRev", data.ticksPerRev);
+                    data.p = read(props, "p", data.p);
+                    data.i = read(props, "i", data.i);
+                    data.d = read(props, "d", data.d);
+                    data.f = read(props, "f", data.f);
+                } else {
+                    data.legacyPidfDiscarded = true;
+                }
+                RobotLog.ii("ShooterCalibration", "Loaded calibration (schema " + schema + ") from " + FILE_NAME);
             }
         } catch (Exception e) {
             RobotLog.ee("ShooterCalibration", "Failed to load calibration: " + e.getMessage());
@@ -51,15 +71,23 @@ public final class ShooterCalibrationStorage {
         return data;
     }
 
+    private static double read(Properties props, String key, double fallback) {
+        double value = Double.parseDouble(props.getProperty(key, Double.toString(fallback)));
+        return Double.isFinite(value) ? value : fallback;
+    }
+
     public static boolean save(Data data) {
         if (data == null) return false;
         try {
             File file = AppUtil.getInstance().getSettingsFile(FILE_NAME);
             Properties props = new Properties();
+            props.setProperty("schema", Integer.toString(SCHEMA));
             props.setProperty("pollenCompression", Double.toString(data.pollenCompression));
             props.setProperty("nectarCompression", Double.toString(data.nectarCompression));
             props.setProperty("hoodPosition", Double.toString(data.hoodPosition));
             props.setProperty("targetRpm", Double.toString(data.targetRpm));
+            props.setProperty("openLoopPower", Double.toString(data.openLoopPower));
+            props.setProperty("ticksPerRev", Double.toString(data.ticksPerRev));
             props.setProperty("p", Double.toString(data.p));
             props.setProperty("i", Double.toString(data.i));
             props.setProperty("d", Double.toString(data.d));

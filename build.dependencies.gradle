@@ -23,7 +23,7 @@ dependencies {
     implementation 'com.pedropathing:tuning:1.0.1'
 
     // FTC Dashboard for live telemetry, graph plotting, and live PIDF tuning
-    implementation 'com.acmerobotics.dashboard:dashboard:0.4.16'
+    implementation 'com.acmerobotics.dashboard:dashboard:0.6.0'
 }
 
 

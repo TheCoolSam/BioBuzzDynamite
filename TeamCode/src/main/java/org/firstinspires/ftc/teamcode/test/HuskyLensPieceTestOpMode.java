@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.test;
 
 import com.qualcomm.hardware.dfrobot.HuskyLens;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -26,6 +27,7 @@ import java.util.List;
  * Camera ids 1, 2, and 3 are placeholders until yellow, red, and blue are
  * taught in Color Recognition with Learn Multiple enabled on the device.
  */
+@Disabled
 @TeleOp(name = "HuskyLens Piece Test", group = "Test")
 public class HuskyLensPieceTestOpMode extends OpMode {
 

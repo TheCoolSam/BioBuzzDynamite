@@ -17,6 +17,19 @@ import org.firstinspires.ftc.teamcode.turret.TurretHardwareConfig;
  */
 public final class RobotHardwareConfig {
 
+    /**
+     * Physical hood pitch limits (-55.0° to 0.0°).
+     * The compression support stop mount hits the ring gear between 55.5° and 56°,
+     * setting the physical pitch limit to -55.0° (prior to the old -70.0° joint limit).
+     * At -55.0°, the compression carriage bottom sits at z 192.4 mm (down from 295.1 mm at pitch 0°).
+     */
+    public static final double HOOD_PITCH_MIN_DEG = -55.0;
+    public static final double HOOD_PITCH_MAX_DEG = 0.0;
+    public static final double HOOD_PITCH_MIN_RAD = Math.toRadians(HOOD_PITCH_MIN_DEG);
+    public static final double HOOD_PITCH_MAX_RAD = Math.toRadians(HOOD_PITCH_MAX_DEG);
+    public static final double HOOD_CARRIAGE_Z_AT_ZERO_MM = 295.1;
+    public static final double HOOD_CARRIAGE_Z_AT_MIN_PITCH_MM = 192.4;
+
     public static Settings measured() {
         return buildCompetitionSettings(false);
     }
@@ -64,7 +77,10 @@ public final class RobotHardwareConfig {
         s.scoringPositionTolerance = 2.0;
         s.scoringHeadingTolerance = Math.toRadians(3.0);
 
-        s.flywheelPidf = new PIDFCoefficients(15.0, 3.0, 0.0, 12.0);
+        // STARTING VALUES, not measured. Hub velocity PIDF scale: F ~= 32767 / max ticks per second
+        // and P ~= 0.1 * F (the SDK's own REV defaults are P 1.17, F 11.7 for a 6000 rpm / 28 tick motor).
+        // Replace with the numbers from "Shooter & Hood Bench Tuner" (open-loop F measurement, then P).
+        s.flywheelPidf = new PIDFCoefficients(1.25, 0.0, 0.0, 12.5);
         s.turretProfile = new TurretControlProfile(-2.9, 2.9, -2.8, 2.8, 2.5, 2.0, 1.2, 0.05, 0.01, 1.0, 0.1, 0.1, 0.6, 6.0, 20.0);
         s.scoringTiming = new ScoringController.Timing(1.5, 0.15, 0.3, 0.15, 1.0, 0.2, 1);
 
@@ -115,8 +131,8 @@ public final class RobotHardwareConfig {
         }
 
         CellTargetGeometry cells = new CellTargetGeometry(Arrays.asList(
-            new CellTargetGeometry.Point(1, HiveTracker.State.SIDE_A_UP, 2.0, 0.0, 1.0, 3.0),
-            new CellTargetGeometry.Point(2, HiveTracker.State.SIDE_B_UP, 2.0, 0.0, 1.0, 3.0)
+            new CellTargetGeometry.Point(1, HiveTracker.State.SIDE_A_UP, 2.0, 0.0, 3.5, 3.0),
+            new CellTargetGeometry.Point(2, HiveTracker.State.SIDE_B_UP, 2.0, 0.0, 3.5, 3.0)
         ));
         s.camera = new CameraTargetTransform(new double[]{1, 0, 0, 0, 1, 0, 0, 0, 1}, 5.0, 0.0, 12.0, 0.0, 10.0, 1.0, 200.0, cells);
         s.cellClassifier = (fiducial) -> HiveTracker.State.SIDE_A_UP;

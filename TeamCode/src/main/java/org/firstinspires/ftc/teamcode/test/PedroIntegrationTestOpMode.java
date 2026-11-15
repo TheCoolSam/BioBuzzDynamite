@@ -3,6 +3,7 @@ package org.firstinspires.ftc.teamcode.test;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.pedropathing.math.Velocity;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -27,6 +28,7 @@ import org.firstinspires.ftc.teamcode.state.RobotStateEstimator;
  * <p>If the Control Hub has no matching devices, init does not crash. The
  * no-hardware sign checks live in {@link PedroMappingScenarios}.
  */
+@Disabled
 @TeleOp(name = "Pedro Integration Test", group = "Test")
 public class PedroIntegrationTestOpMode extends OpMode {
 

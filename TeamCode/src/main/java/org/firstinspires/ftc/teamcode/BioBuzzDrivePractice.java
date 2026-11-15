@@ -4,6 +4,7 @@ import com.qualcomm.robotcore.eventloop.opmode.*;
 import org.firstinspires.ftc.teamcode.robot.*;
 
 /** Four-motor commissioning/practice mode. No launcher, vision, odometry or path tune required. */
+@Disabled
 @TeleOp(name="BIOBUZZ Drive Practice",group="Commissioning")
 public final class BioBuzzDrivePractice extends OpMode {
     private RevBasicDrive drive;

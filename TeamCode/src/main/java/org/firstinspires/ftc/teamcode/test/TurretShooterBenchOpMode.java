@@ -1,10 +1,7 @@
 package org.firstinspires.ftc.teamcode.test;
 
 import com.acmerobotics.dashboard.FtcDashboard;
-import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
-import com.qualcomm.hardware.limelightvision.LLResult;
-import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -12,425 +9,597 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.VoltageSensor;
+import com.qualcomm.robotcore.util.ElapsedTime;
+
 import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
 import org.firstinspires.ftc.teamcode.scoring.ShooterCalibrationStorage;
 
 /**
- * Dedicated Bench Tuner for BioBuzz Shooter & Hood assembly.
- * Configured specifically for:
- * - 1x Axon Servo for Hood Angle ("hood")
- * - 1x Axon Servo for Ball Compression ("compression")
- * - 1x Flywheel Motor ("flywheel")
- * - 1x Limelight 3A ("limelight")
+ * Shooter and hood bench tuner.
  *
- * Keeps servos completely disabled (unpowered) during INIT to prevent jumping or twitching.
- * Sets calibrated Axon 500us - 2500us PWM range to eliminate jitter.
+ * <h3>How the flywheel is tuned (do it in this order)</h3>
+ * <ol>
+ *   <li><b>OPEN LOOP</b> (starts here, like the OnBot test): Cross/A spins at OPEN_LOOP_POWER.
+ *       D-pad up/down changes the power. When the speed stops changing the tuner prints the
+ *       measured RPM and a suggested F.</li>
+ *   <li>Press <b>Right Stick Click</b> (or tick APPLY_SUGGESTED_PIDF in Dashboard) to load
+ *       F = 32767 / measured ticks per second, P = 0.1 F, I = D = 0.</li>
+ *   <li>Press <b>Back/Share</b> to switch to VELOCITY mode. Set TARGET_RPM, spin up, then raise
+ *       P a little at a time while watching the actualRpm graph and the "last dip" line.</li>
+ * </ol>
+ *
+ * <h3>Dashboard</h3>
+ * Every tunable is registered with FTC Dashboard under "Shooter Bench" through an explicit
+ * ValueProvider, so the robot knows exactly when a Dashboard edit arrives. The DS screen shows
+ * "Dashboard edits received" and the last edit. Gamepad changes are pushed back to the Dashboard
+ * panel. In the Dashboard config panel, type the value and press ENTER (or the check mark).
  */
-@Config
 @TeleOp(name = "Shooter & Hood Bench Tuner", group = "Bench")
 public class TurretShooterBenchOpMode extends OpMode {
 
-    // FTC Dashboard live-tunable variables
-    public static double TARGET_RPM = 1400.0;
-    public static double P = 15.0;
-    public static double I = 0.0;
-    public static double D = 0.5;
-    public static double F = 12.5;
+    private static final String DASH_CATEGORY = "Shooter Bench";
+    /** Hub velocity controller output saturates at +/-32767, so F ~= 32767 / max ticks per second. */
+    private static final double HUB_FULL_SCALE = 32767.0;
+    private static final double MAX_RPM_LIMIT = 6500.0;
 
-    public static double HOOD_POSITION = 0.35;
-    public static double POLLEN_COMPRESSION = 0.30;
-    public static double NECTAR_COMPRESSION = 0.50;
-    public static String ACTIVE_BALL = "POLLEN"; // "POLLEN" or "NECTAR"
-    public static double TICKS_PER_REV = 28.0;
+    private static final double STICK_DEADZONE = 0.15;
+    private static final double HOOD_STICK_SPEED = 0.20;
+    private static final double COMPRESSION_STICK_SPEED = 0.15;
 
-    public static boolean SERVOS_ENABLED = true;
-    public static boolean SAVE_CALIBRATION = false;
-    public static int LIMELIGHT_PIPELINE = 0;
-
-    private MultipleTelemetry multiTelemetry;
-    private DcMotorEx flywheel;
-    private Servo hood;
-    private Servo compression;
-    private Limelight3A limelight;
-
-    private boolean flywheelEnabled = false;
-    private boolean servosEngaged = false;
-    private BallType activeBall = BallType.POLLEN;
-    private String statusMessage = "Ready";
-
-    private boolean previousCross = false;
-    private boolean previousTriangle = false;
-    private boolean previousSquare = false;
-    private boolean previousDpadUp = false;
-    private boolean previousDpadDown = false;
-    private boolean previousDpadLeft = false;
-    private boolean previousDpadRight = false;
-    private boolean previousLb = false;
-    private boolean previousRb = false;
-    private boolean previousOptions = false;
-
-    private double lastP = Double.NaN;
-    private double lastI = Double.NaN;
-    private double lastD = Double.NaN;
-    private double lastF = Double.NaN;
-    private double lastHood = Double.NaN;
-    private double lastCompression = Double.NaN;
+    private static final double P_STEP = 0.25, F_STEP = 0.25, D_STEP = 0.05, I_STEP = 0.01;
+    private static final double RPM_STEP = 50.0, POWER_STEP = 0.05;
 
     // Axon official PWM frame range (500us - 2500us at 50Hz/20ms frame)
     private static final PwmControl.PwmRange AXON_PWM_RANGE = new PwmControl.PwmRange(500, 2500, 20000);
 
+    // ---------------------------------------------------------------- tunables (shown in Dashboard)
+    private final DashboardTunables dash = new DashboardTunables(DASH_CATEGORY);
+    private final DashboardTunables.Num targetRpm = dash.num("TARGET_RPM", 3000.0);
+    private final DashboardTunables.Num openLoopPower = dash.num("OPEN_LOOP_POWER", 0.30);
+    private final DashboardTunables.Num kP = dash.num("P", 1.25);
+    private final DashboardTunables.Num kI = dash.num("I", 0.0);
+    private final DashboardTunables.Num kD = dash.num("D", 0.0);
+    private final DashboardTunables.Num kF = dash.num("F", 12.5);
+    private final DashboardTunables.Num ticksPerRev = dash.num("TICKS_PER_REV", 28.0);
+    private final DashboardTunables.Num hoodPosition = dash.num("HOOD_POSITION", 0.35);
+    private final DashboardTunables.Num pollenCompression = dash.num("POLLEN_COMPRESSION", 0.30);
+    private final DashboardTunables.Num nectarCompression = dash.num("NECTAR_COMPRESSION", 0.50);
+    // NECTAR_BALL false = pollen. VELOCITY_MODE false = open loop.
+    private final DashboardTunables.Flag nectarBall = dash.flag("NECTAR_BALL", false);
+    private final DashboardTunables.Flag velocityMode = dash.flag("VELOCITY_MODE", false);
+    private final DashboardTunables.Flag flywheelOn = dash.flag("FLYWHEEL_ON", false);
+    // One-shot buttons: tick them in Dashboard; they reset themselves.
+    private final DashboardTunables.Flag actApplySuggested = dash.flag("APPLY_SUGGESTED_PIDF", false);
+    private final DashboardTunables.Flag actSave = dash.flag("SAVE_CALIBRATION", false);
+    private String dashStatus = "NOT CHECKED";
+
+    // ---------------------------------------------------------------- hardware / state
+    private MultipleTelemetry multiTelemetry;
+    private DcMotorEx flywheel;
+    private Servo hood;
+    private Servo compression;
+    private VoltageSensor battery;
+
+    private boolean servosEngaged = false;
+    private String statusMessage = "Ready";
+
+    private final Edge eCross = new Edge(), eSquare = new Edge(), eTriangle = new Edge(),
+            eBack = new Edge(), eOptions = new Edge(), eUp = new Edge(), eDown = new Edge(),
+            eLeft = new Edge(), eRight = new Edge(), eLb = new Edge(), eRb = new Edge(),
+            eRsb = new Edge(), eStop = new Edge();
+
+    private final ElapsedTime loopTimer = new ElapsedTime();
+    private final ElapsedTime clock = new ElapsedTime();
+
+    // applied-to-hardware tracking
+    private double appliedP = Double.NaN, appliedI = Double.NaN, appliedD = Double.NaN, appliedF = Double.NaN;
+    private boolean modeApplied = false;
+    private boolean appliedVelocityMode = false;
+    private double lastHoodCmd = Double.NaN, lastCompCmd = Double.NaN;
+    private PIDFCoefficients hubReadback = null;
+    private double lastReadbackSec = -10, lastBatterySec = -10, batteryVolts = Double.NaN;
+
+    // measurement
+    private double rpmRaw = 0, rpmFiltered = 0, rawTps = 0;
+    private double steadyAnchor = Double.NaN, steadySince = 0;
+    private boolean steady = false;
+    private double steadyRpm = 0, steadyPower = 0, steadyVolts = Double.NaN;
+    private double suggestedF = Double.NaN, estMaxRpm = Double.NaN;
+
+    // ball-dip tracker (velocity mode)
+    private int dipState = 0;
+    private double settledSince = -1, dipStart = 0, dipMin = 0;
+    private double lastDipDepthRpm = Double.NaN, lastRecoverySec = Double.NaN;
+    private int dipCount = 0;
+
+    private String motorTypeInfo = "unknown";
+
+    private static final class Edge {
+        private boolean prev;
+        boolean rising(boolean now) {
+            boolean r = now && !prev;
+            prev = now;
+            return r;
+        }
+    }
+
+    // ================================================================ lifecycle
     @Override
     public void init() {
-        multiTelemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
+        FtcDashboard ftcDash = FtcDashboard.getInstance();
+        multiTelemetry = new MultipleTelemetry(telemetry, ftcDash != null ? ftcDash.getTelemetry() : telemetry);
+        telemetry.setMsTransmissionInterval(50);
 
-        // Load saved calibration from disk
         ShooterCalibrationStorage.Data saved = ShooterCalibrationStorage.load();
-        POLLEN_COMPRESSION = saved.pollenCompression;
-        NECTAR_COMPRESSION = saved.nectarCompression;
-        HOOD_POSITION = saved.hoodPosition;
-        TARGET_RPM = saved.targetRpm;
-        P = saved.p;
-        I = saved.i;
-        D = saved.d;
-        F = saved.f;
-        statusMessage = "Loaded calibration from storage";
+        pollenCompression.local(saved.pollenCompression);
+        nectarCompression.local(saved.nectarCompression);
+        hoodPosition.local(saved.hoodPosition);
+        targetRpm.local(saved.targetRpm);
+        openLoopPower.local(saved.openLoopPower);
+        ticksPerRev.local(saved.ticksPerRev);
+        kP.local(saved.p);
+        kI.local(saved.i);
+        kD.local(saved.d);
+        kF.local(saved.f);
+        statusMessage = saved.legacyPidfDiscarded
+                ? "Old PIDF/RPM numbers from the first bench tuner were discarded (wrong scale)"
+                : "Loaded calibration from storage";
 
-        // Initialize Flywheel
+        dashStatus = dash.register();
+
         try {
             flywheel = hardwareMap.get(DcMotorEx.class, "flywheel");
-            flywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+            flywheel.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+            flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
             flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
             flywheel.setPower(0);
-            updatePidfCoefficients();
-            multiTelemetry.addLine("Flywheel: Connected");
-        } catch (Exception e) {
-            multiTelemetry.addData("Flywheel Error", e.getMessage());
-        }
-
-        // Initialize Hood Axon Servo (Keep PWM DISABLED in init to prevent snapping/twitching)
-        try {
-            hood = hardwareMap.get(Servo.class, "hood");
-            if (hood instanceof PwmControl) {
-                ((PwmControl) hood).setPwmRange(AXON_PWM_RANGE);
-                ((PwmControl) hood).setPwmDisable();
+            try {
+                motorTypeInfo = String.format("%.0f ticks/rev, %.0f rpm, SDK max %.0f ticks/s -> F %.2f",
+                        flywheel.getMotorType().getTicksPerRev(),
+                        flywheel.getMotorType().getMaxRPM(),
+                        flywheel.getMotorType().getAchieveableMaxTicksPerSecond(),
+                        HUB_FULL_SCALE / flywheel.getMotorType().getAchieveableMaxTicksPerSecond());
+            } catch (RuntimeException e) {
+                motorTypeInfo = "motor type unreadable";
             }
-            multiTelemetry.addLine("Hood Axon Servo: Connected (PWM Disabled until Start)");
         } catch (Exception e) {
-            multiTelemetry.addData("Hood Servo Error", e.getMessage());
+            statusMessage = "FLYWHEEL NOT FOUND: " + e.getMessage();
         }
-
-        // Initialize Compression Axon Servo (Keep PWM DISABLED in init to prevent snapping/twitching)
         try {
-            compression = hardwareMap.get(Servo.class, "compression");
-            if (compression instanceof PwmControl) {
-                ((PwmControl) compression).setPwmRange(AXON_PWM_RANGE);
-                ((PwmControl) compression).setPwmDisable();
-            }
-            multiTelemetry.addLine("Compression Axon Servo: Connected (PWM Disabled until Start)");
-        } catch (Exception e) {
-            multiTelemetry.addData("Compression Servo Error", e.getMessage());
-        }
+            battery = hardwareMap.voltageSensor.iterator().next();
+        } catch (RuntimeException ignored) { }
 
-        // Initialize Limelight
-        try {
-            limelight = hardwareMap.get(Limelight3A.class, "limelight");
-            limelight.pipelineSwitch(LIMELIGHT_PIPELINE);
-            limelight.start();
-            multiTelemetry.addLine("Limelight 3A: Connected");
-        } catch (Exception e) {
-            multiTelemetry.addData("Limelight Error", e.getMessage());
-        }
+        hood = initServo("hood");
+        compression = initServo("compression");
 
-        multiTelemetry.addLine("--- READY ---");
-        multiTelemetry.addLine("Servos are safely OFF in INIT. Press START to enable.");
+        clock.reset();
+        loopTimer.reset();
+        multiTelemetry.addLine("READY. Servos are OFF in INIT; press START to enable.");
+        multiTelemetry.addData("Dashboard", dashStatus);
+        multiTelemetry.addData("Flywheel motor type", motorTypeInfo);
         multiTelemetry.update();
+    }
+
+    @Override
+    public void init_loop() {
+        multiTelemetry.addData("Dashboard", dashStatus);
+        multiTelemetry.addData("Config panel", "Open http://192.168.43.1:8080/dash -> Configuration -> \"%s\"", DASH_CATEGORY);
+        multiTelemetry.addData("Flywheel motor type", motorTypeInfo);
+        multiTelemetry.addData("Status", statusMessage);
+        multiTelemetry.update();
+        dash.pushIfDirty();
     }
 
     @Override
     public void start() {
-        // When START is pressed, engage servos cleanly
-        if (SERVOS_ENABLED) {
-            enableServos();
-            servosEngaged = true;
-        }
-        statusMessage = "OpMode Running";
+        enableServos();
+        servosEngaged = true;
+        statusMessage = "Running in " + (velocityMode.v() ? "VELOCITY" : "OPEN LOOP") + " mode";
+        loopTimer.reset();
     }
 
     @Override
     public void loop() {
-        // Emergency Stop: PS5 Circle or Gamepad B (instantly cuts power and relaxes servos)
-        boolean btnStop = gamepad1.circle || gamepad1.b;
-        if (btnStop) {
-            flywheelEnabled = false;
-            servosEngaged = false;
-            disableServos();
+        double dt = Math.max(0.001, Math.min(0.05, loopTimer.seconds()));
+        loopTimer.reset();
+        double now = clock.seconds();
+
+        // ---- emergency stop (hold B / Circle). Cuts the flywheel and relaxes servos.
+        if (gamepad1.b) {
+            if (eStop.rising(true)) {
+                flywheelOn.local(false);
+                servosEngaged = false;
+                disableServos();
+                statusMessage = "EMERGENCY STOP (servos relaxed, flywheel off)";
+            }
             if (flywheel != null) flywheel.setPower(0);
-            statusMessage = "EMERGENCY STOP (Servos & Motor Cut)";
-            publishTelemetry(0.0, 0.0, 0.0, false);
+            measure(now);
+            publishTelemetry(now);
+            dash.pushIfDirty();
             return;
         }
+        eStop.rising(false);
 
-        // Check if Dashboard triggered a calibration save
-        if (SAVE_CALIBRATION) {
-            SAVE_CALIBRATION = false;
-            saveCurrentCalibration();
-        }
-
-        // Save calibration: PS5 Options or Gamepad Start
-        boolean btnSave = gamepad1.options || gamepad1.start;
-        if (btnSave && !previousOptions) {
-            saveCurrentCalibration();
-        }
-        previousOptions = btnSave;
-
-        // Toggle Servos Power: PS5 Square or Gamepad X
-        boolean btnSquare = gamepad1.square || gamepad1.x;
-        if (btnSquare && !previousSquare) {
-            servosEngaged = !servosEngaged;
-            if (servosEngaged) {
-                enableServos();
-                statusMessage = "Servos Engaged";
-            } else {
-                disableServos();
-                statusMessage = "Servos Relaxed (Unpowered)";
-            }
-        }
-        previousSquare = btnSquare;
-
-        // Toggle active ball size: PS5 Triangle or Gamepad Y
-        boolean btnBallToggle = gamepad1.triangle || gamepad1.y;
-        if (btnBallToggle && !previousTriangle) {
-            if (activeBall == BallType.POLLEN) {
-                activeBall = BallType.NECTAR;
-                ACTIVE_BALL = "NECTAR";
-            } else {
-                activeBall = BallType.POLLEN;
-                ACTIVE_BALL = "POLLEN";
-            }
-            statusMessage = "Active ball: " + activeBall.name();
-        }
-        previousTriangle = btnBallToggle;
-
-        // Sync ACTIVE_BALL from Dashboard if changed
-        if ("NECTAR".equalsIgnoreCase(ACTIVE_BALL) && activeBall != BallType.NECTAR) {
-            activeBall = BallType.NECTAR;
-        } else if ("POLLEN".equalsIgnoreCase(ACTIVE_BALL) && activeBall != BallType.POLLEN) {
-            activeBall = BallType.POLLEN;
-        }
-
-        // Adjust Compression: D-Pad Left (-0.01) / Right (+0.01)
-        if (gamepad1.dpad_left && !previousDpadLeft) {
-            adjustActiveCompression(-0.01);
-        }
-        previousDpadLeft = gamepad1.dpad_left;
-
-        if (gamepad1.dpad_right && !previousDpadRight) {
-            adjustActiveCompression(+0.01);
-        }
-        previousDpadRight = gamepad1.dpad_right;
-
-        // Adjust Hood Position: L1 (-0.01) / R1 (+0.01)
-        if (gamepad1.left_bumper && !previousLb) {
-            HOOD_POSITION = Math.max(0.0, Math.min(1.0, HOOD_POSITION - 0.01));
-        }
-        previousLb = gamepad1.left_bumper;
-
-        if (gamepad1.right_bumper && !previousRb) {
-            HOOD_POSITION = Math.max(0.0, Math.min(1.0, HOOD_POSITION + 0.01));
-        }
-        previousRb = gamepad1.right_bumper;
-
-        // Adjust Target RPM: D-Pad Up (+50) / Down (-50)
-        if (gamepad1.dpad_up && !previousDpadUp) {
-            TARGET_RPM = Math.min(6000.0, TARGET_RPM + 50.0);
-        }
-        previousDpadUp = gamepad1.dpad_up;
-
-        if (gamepad1.dpad_down && !previousDpadDown) {
-            TARGET_RPM = Math.max(0.0, TARGET_RPM - 50.0);
-        }
-        previousDpadDown = gamepad1.dpad_down;
-
-        // Toggle Flywheel: PS5 Cross or Gamepad A
-        boolean btnCross = gamepad1.cross || gamepad1.a;
-        if (btnCross && !previousCross) {
-            flywheelEnabled = !flywheelEnabled;
-            statusMessage = flywheelEnabled ? "Flywheel Spinning" : "Flywheel Stopped";
-        }
-        previousCross = btnCross;
-
-        // Command Servos only when engaged
-        if (servosEngaged) {
-            if (hood != null && HOOD_POSITION != lastHood) {
-                hood.setPosition(HOOD_POSITION);
-                lastHood = HOOD_POSITION;
-            }
-
-            double currentComp = getActiveCompression();
-            if (compression != null && currentComp != lastCompression) {
-                compression.setPosition(currentComp);
-                lastCompression = currentComp;
-            }
-        }
-
-        // Apply PIDF if changed
-        if (P != lastP || I != lastI || D != lastD || F != lastF) {
-            updatePidfCoefficients();
-        }
-
-        // Flywheel Control
-        double actualRpm = 0.0;
-        if (flywheel != null) {
-            if (flywheelEnabled) {
-                double targetTicksPerSec = TARGET_RPM * (TICKS_PER_REV / 60.0);
-                flywheel.setVelocity(targetTicksPerSec);
-            } else {
-                flywheel.setPower(0);
-            }
-            actualRpm = flywheel.getVelocity() * (60.0 / TICKS_PER_REV);
-        }
-
-        // Limelight Feedback
-        double tx = 0.0, ty = 0.0;
-        boolean hasTarget = false;
-        if (limelight != null) {
-            LLResult result = limelight.getLatestResult();
-            if (result != null && result.isValid()) {
-                hasTarget = true;
-                tx = result.getTx();
-                ty = result.getTy();
-            }
-        }
-
-        publishTelemetry(actualRpm, tx, ty, hasTarget);
-    }
-
-    private void enableServos() {
-        if (hood instanceof PwmControl) {
-            ((PwmControl) hood).setPwmEnable();
-        }
-        if (hood != null) {
-            hood.setPosition(HOOD_POSITION);
-            lastHood = HOOD_POSITION;
-        }
-
-        if (compression instanceof PwmControl) {
-            ((PwmControl) compression).setPwmEnable();
-        }
-        if (compression != null) {
-            double comp = getActiveCompression();
-            compression.setPosition(comp);
-            lastCompression = comp;
-        }
-    }
-
-    private void disableServos() {
-        if (hood instanceof PwmControl) {
-            ((PwmControl) hood).setPwmDisable();
-        }
-        if (compression instanceof PwmControl) {
-            ((PwmControl) compression).setPwmDisable();
-        }
-        lastHood = Double.NaN;
-        lastCompression = Double.NaN;
-    }
-
-    private double getActiveCompression() {
-        return activeBall == BallType.POLLEN ? POLLEN_COMPRESSION : NECTAR_COMPRESSION;
-    }
-
-    private void adjustActiveCompression(double delta) {
-        if (activeBall == BallType.POLLEN) {
-            POLLEN_COMPRESSION = Math.max(0.0, Math.min(1.0, POLLEN_COMPRESSION + delta));
-        } else {
-            NECTAR_COMPRESSION = Math.max(0.0, Math.min(1.0, NECTAR_COMPRESSION + delta));
-        }
-    }
-
-    private void saveCurrentCalibration() {
-        ShooterCalibrationStorage.Data data = new ShooterCalibrationStorage.Data();
-        data.pollenCompression = POLLEN_COMPRESSION;
-        data.nectarCompression = NECTAR_COMPRESSION;
-        data.hoodPosition = HOOD_POSITION;
-        data.targetRpm = TARGET_RPM;
-        data.p = P;
-        data.i = I;
-        data.d = D;
-        data.f = F;
-
-        boolean success = ShooterCalibrationStorage.save(data);
-        statusMessage = success ? "CALIBRATION SAVED TO DISK" : "SAVE FAILED (Check log)";
-    }
-
-    private void updatePidfCoefficients() {
-        if (flywheel != null) {
-            PIDFCoefficients pidf = new PIDFCoefficients(P, I, D, F);
-            flywheel.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER, pidf);
-            lastP = P;
-            lastI = I;
-            lastD = D;
-            lastF = F;
-        }
-    }
-
-    private void publishTelemetry(double actualRpm, double tx, double ty, boolean hasTarget) {
-        int rawTicks = 0;
-        double rawVelocity = 0.0;
-        double power = 0.0;
-        if (flywheel != null) {
-            rawTicks = flywheel.getCurrentPosition();
-            rawVelocity = flywheel.getVelocity();
-            power = flywheel.getPower();
-        }
-
-        // Graphing fields for FTC Dashboard
-        multiTelemetry.addData("targetRpm", TARGET_RPM);
-        multiTelemetry.addData("actualRpm", actualRpm);
-        multiTelemetry.addData("rpmError", flywheelEnabled ? (TARGET_RPM - actualRpm) : 0.0);
-        multiTelemetry.addData("Flywheel Enabled (press Cross/A)", flywheelEnabled);
-        multiTelemetry.addData("Dashboard PIDF (P,I,D,F)", "%.2f, %.2f, %.2f, %.2f", P, I, D, F);
-        if (flywheel != null) {
-            PIDFCoefficients hub = flywheel.getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER);
-            multiTelemetry.addData("Hub PIDF readback", "%.2f, %.2f, %.2f, %.2f", hub.p, hub.i, hub.d, hub.f);
-        }
-        multiTelemetry.addData("flywheelPower", power);
-
-        // Encoder Diagnostic Check
-        multiTelemetry.addData("Encoder Raw Ticks", rawTicks);
-        multiTelemetry.addData("Encoder Raw Vel (ticks/s)", "%.1f", rawVelocity);
-        if (flywheelEnabled && power > 0.05 && rawVelocity == 0.0) {
-            multiTelemetry.addLine(">> WARNING: Motor powered but 0 encoder pulses detected! Check 4-pin encoder cable! <<");
-        }
-
-        // Active Tuning State
-        multiTelemetry.addData("STATUS", statusMessage);
-        multiTelemetry.addData("Servos State", servosEngaged ? "ENGAGED" : "RELAXED (Unpowered)");
-        multiTelemetry.addData("Active Ball", "%s (Compression: %.3f)", activeBall.name(), getActiveCompression());
-        multiTelemetry.addData("Pollen Compression", "%.3f", POLLEN_COMPRESSION);
-        multiTelemetry.addData("Nectar Compression", "%.3f", NECTAR_COMPRESSION);
-        multiTelemetry.addData("Hood Position", "%.3f", HOOD_POSITION);
-
-        // Limelight Alignment
-        multiTelemetry.addData("Limelight Target Lock", hasTarget ? "LOCKED" : "SEARCHING");
-        multiTelemetry.addData("Tag tx (Yaw deg)", "%.2f", tx);
-        multiTelemetry.addData("Tag ty (Pitch deg)", "%.2f", ty);
-
-        // Controls summary
-        multiTelemetry.addLine("--- PS5 CONTROLS ---");
-        multiTelemetry.addLine("[Square / \u25a1] Toggle Servos Power (Relax/Hold)");
-        multiTelemetry.addLine("[Triangle / \u0394] Toggle Ball (POLLEN/NECTAR) | [D-Pad L/R] Compression +/-0.01");
-        multiTelemetry.addLine("[L1 / R1] Hood Angle +/-0.01 | [D-Pad U/D] RPM +/-50 | [Cross / \u2715] Flywheel Toggle");
-        multiTelemetry.addLine("[Options] Save Calibration to Disk | [Circle / \u25cb] Emergency STOP");
-
-        multiTelemetry.update();
+        handleDashboardActions();
+        handleGamepad(dt);
+        applyServos();
+        applyPidfIfChanged();
+        applyFlywheel();
+        measure(now);
+        trackSteadyState(now);
+        trackBallDip(now);
+        publishTelemetry(now);
+        dash.pushIfDirty();
     }
 
     @Override
     public void stop() {
         if (flywheel != null) flywheel.setPower(0);
         disableServos();
-        if (limelight != null) {
-            try { limelight.stop(); } catch (Exception ignored) {}
+        dash.unregister();
+    }
+
+    // ================================================================ dashboard actions
+    private void handleDashboardActions() {
+        if (actApplySuggested.v()) {
+            actApplySuggested.local(false);
+            applySuggestedPidf();
         }
+        if (actSave.v()) {
+            actSave.local(false);
+            saveCalibration();
+        }
+        // Dashboard may write nonsense; keep it inside safe ranges.
+        targetRpm.local(clamp(targetRpm.v(), 0, MAX_RPM_LIMIT));
+        openLoopPower.local(clamp(openLoopPower.v(), 0, 1));
+        hoodPosition.local(clamp(hoodPosition.v(), 0, 1));
+        pollenCompression.local(clamp(pollenCompression.v(), 0, 1));
+        nectarCompression.local(clamp(nectarCompression.v(), 0, 1));
+        if (!(ticksPerRev.v() > 0)) ticksPerRev.local(28.0);
+        kP.local(Math.max(0, kP.v()));
+        kI.local(Math.max(0, kI.v()));
+        kD.local(Math.max(0, kD.v()));
+        kF.local(Math.max(0, kF.v()));
+    }
+
+    // ================================================================ gamepad
+    private void handleGamepad(double dt) {
+        boolean up = eUp.rising(gamepad1.dpad_up);
+        boolean down = eDown.rising(gamepad1.dpad_down);
+        boolean left = eLeft.rising(gamepad1.dpad_left);
+        boolean right = eRight.rising(gamepad1.dpad_right);
+
+        if (eOptions.rising(gamepad1.options || gamepad1.start)) saveCalibration();
+
+        if (eSquare.rising(gamepad1.square || gamepad1.x)) {
+            servosEngaged = !servosEngaged;
+            if (servosEngaged) enableServos(); else disableServos();
+            statusMessage = servosEngaged ? "Servos engaged" : "Servos relaxed (unpowered)";
+        }
+
+        if (eTriangle.rising(gamepad1.triangle || gamepad1.y)) {
+            nectarBall.local(!nectarBall.v());
+            statusMessage = "Active ball: " + activeBall().name();
+        }
+
+        if (eBack.rising(gamepad1.back)) {
+            velocityMode.local(!velocityMode.v());
+            flywheelOn.local(false);
+            statusMessage = "Switched to " + (velocityMode.v() ? "VELOCITY" : "OPEN LOOP") + " mode (flywheel stopped)";
+        }
+
+        if (eCross.rising(gamepad1.cross || gamepad1.a)) {
+            flywheelOn.local(!flywheelOn.v());
+            statusMessage = flywheelOn.v() ? "Flywheel spinning" : "Flywheel stopped";
+        }
+
+        if (eRsb.rising(gamepad1.right_stick_button)) applySuggestedPidf();
+
+        boolean holdL2 = gamepad1.left_trigger > 0.5;
+        boolean holdR2 = gamepad1.right_trigger > 0.5;
+        if (holdL2) {
+            // L2 + D-pad: U/D = P, L/R = D
+            if (up) kP.local(kP.v() + P_STEP);
+            if (down) kP.local(Math.max(0, kP.v() - P_STEP));
+            if (right) kD.local(kD.v() + D_STEP);
+            if (left) kD.local(Math.max(0, kD.v() - D_STEP));
+        } else if (holdR2) {
+            // R2 + D-pad: U/D = F, L/R = I
+            if (up) kF.local(kF.v() + F_STEP);
+            if (down) kF.local(Math.max(0, kF.v() - F_STEP));
+            if (right) kI.local(kI.v() + I_STEP);
+            if (left) kI.local(Math.max(0, kI.v() - I_STEP));
+        } else {
+            if (velocityMode.v()) {
+                if (up) targetRpm.local(Math.min(MAX_RPM_LIMIT, targetRpm.v() + RPM_STEP));
+                if (down) targetRpm.local(Math.max(0, targetRpm.v() - RPM_STEP));
+            } else {
+                if (up) openLoopPower.local(Math.min(1.0, openLoopPower.v() + POWER_STEP));
+                if (down) openLoopPower.local(Math.max(0, openLoopPower.v() - POWER_STEP));
+            }
+            if (left) adjustCompression(-0.01);
+            if (right) adjustCompression(+0.01);
+        }
+
+        // Hood: bumpers fine step, right stick continuous (like the OnBot test).
+        if (eLb.rising(gamepad1.left_bumper)) hoodPosition.local(clamp(hoodPosition.v() - 0.01, 0, 1));
+        if (eRb.rising(gamepad1.right_bumper)) hoodPosition.local(clamp(hoodPosition.v() + 0.01, 0, 1));
+        double hoodStick = -gamepad1.right_stick_y;
+        if (Math.abs(hoodStick) > STICK_DEADZONE) {
+            hoodPosition.local(clamp(hoodPosition.v() + hoodStick * HOOD_STICK_SPEED * dt, 0, 1));
+        }
+        // Compression: left stick continuous for the active ball.
+        double compStick = -gamepad1.left_stick_y;
+        if (Math.abs(compStick) > STICK_DEADZONE) {
+            adjustCompression(compStick * COMPRESSION_STICK_SPEED * dt);
+        }
+    }
+
+    // ================================================================ servos
+    private Servo initServo(String name) {
+        try {
+            Servo s = hardwareMap.get(Servo.class, name);
+            if (s instanceof PwmControl) {
+                ((PwmControl) s).setPwmRange(AXON_PWM_RANGE);
+                ((PwmControl) s).setPwmDisable();
+            }
+            return s;
+        } catch (Exception e) {
+            statusMessage = name + " servo not found: " + e.getMessage();
+            return null;
+        }
+    }
+
+    private void enableServos() {
+        if (hood instanceof PwmControl) ((PwmControl) hood).setPwmEnable();
+        if (compression instanceof PwmControl) ((PwmControl) compression).setPwmEnable();
+        lastHoodCmd = Double.NaN;
+        lastCompCmd = Double.NaN;
+        applyServos();
+    }
+
+    private void disableServos() {
+        if (hood instanceof PwmControl) ((PwmControl) hood).setPwmDisable();
+        if (compression instanceof PwmControl) ((PwmControl) compression).setPwmDisable();
+        lastHoodCmd = Double.NaN;
+        lastCompCmd = Double.NaN;
+    }
+
+    private void applyServos() {
+        if (!servosEngaged) return;
+        if (hood != null && !(Math.abs(hoodPosition.v() - lastHoodCmd) < 1e-4)) {
+            hood.setPosition(hoodPosition.v());
+            lastHoodCmd = hoodPosition.v();
+        }
+        double comp = activeCompression();
+        if (compression != null && !(Math.abs(comp - lastCompCmd) < 1e-4)) {
+            compression.setPosition(comp);
+            lastCompCmd = comp;
+        }
+    }
+
+    private BallType activeBall() { return nectarBall.v() ? BallType.NECTAR : BallType.POLLEN; }
+
+    private double activeCompression() {
+        return nectarBall.v() ? nectarCompression.v() : pollenCompression.v();
+    }
+
+    private void adjustCompression(double delta) {
+        if (nectarBall.v()) nectarCompression.local(clamp(nectarCompression.v() + delta, 0, 1));
+        else pollenCompression.local(clamp(pollenCompression.v() + delta, 0, 1));
+    }
+
+    // ================================================================ flywheel
+    private void applyPidfIfChanged() {
+        if (flywheel == null) return;
+        double p = kP.v(), i = kI.v(), d = kD.v(), f = kF.v();
+        if (p == appliedP && i == appliedI && d == appliedD && f == appliedF) return;
+        try {
+            flywheel.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER, new PIDFCoefficients(p, i, d, f));
+            appliedP = p; appliedI = i; appliedD = d; appliedF = f;
+            lastReadbackSec = -10; // force a fresh readback
+        } catch (RuntimeException e) {
+            statusMessage = "setPIDFCoefficients failed: " + e.getMessage();
+        }
+    }
+
+    private void applyFlywheel() {
+        if (flywheel == null) return;
+        boolean wantVelocity = velocityMode.v();
+        if (!modeApplied || wantVelocity != appliedVelocityMode) {
+            flywheel.setPower(0);
+            flywheel.setMode(wantVelocity ? DcMotor.RunMode.RUN_USING_ENCODER : DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            appliedVelocityMode = wantVelocity;
+            modeApplied = true;
+        }
+        if (!flywheelOn.v()) {
+            flywheel.setPower(0);
+        } else if (wantVelocity) {
+            flywheel.setVelocity(targetRpm.v() * ticksPerRev.v() / 60.0);
+        } else {
+            flywheel.setPower(openLoopPower.v());
+        }
+    }
+
+    private void measure(double now) {
+        if (flywheel == null) return;
+        rawTps = flywheel.getVelocity();
+        rpmRaw = rawTps * 60.0 / ticksPerRev.v();
+        rpmFiltered += 0.35 * (rpmRaw - rpmFiltered);
+        if (now - lastBatterySec > 0.25 && battery != null) {
+            batteryVolts = battery.getVoltage();
+            lastBatterySec = now;
+        }
+        if (now - lastReadbackSec > 0.5) {
+            try { hubReadback = flywheel.getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER); }
+            catch (RuntimeException ignored) { }
+            lastReadbackSec = now;
+        }
+    }
+
+    /** Open loop only: when the speed stops changing, record it and derive F. */
+    private void trackSteadyState(double now) {
+        boolean running = flywheelOn.v() && !velocityMode.v() && openLoopPower.v() > 0.05 && rpmFiltered > 200;
+        if (!running) {
+            steadyAnchor = Double.NaN;
+            steady = false;
+            return;
+        }
+        if (Double.isNaN(steadyAnchor) || Math.abs(rpmFiltered - steadyAnchor) > 0.015 * steadyAnchor) {
+            steadyAnchor = rpmFiltered;
+            steadySince = now;
+            steady = false;
+        } else if (now - steadySince >= 1.5) {
+            steady = true;
+            steadyRpm = rpmFiltered;
+            steadyPower = openLoopPower.v();
+            steadyVolts = batteryVolts;
+            double tps = steadyRpm * ticksPerRev.v() / 60.0;
+            suggestedF = HUB_FULL_SCALE * steadyPower / tps;
+            estMaxRpm = steadyRpm / steadyPower;
+        }
+    }
+
+    /** Velocity mode only: measure how far a ball knocks the speed down and how long recovery takes. */
+    private void trackBallDip(double now) {
+        double target = targetRpm.v();
+        if (!(flywheelOn.v() && velocityMode.v() && target > 200)) {
+            dipState = 0;
+            settledSince = -1;
+            return;
+        }
+        double err = Math.abs(rpmFiltered - target) / target;
+        switch (dipState) {
+            case 0:
+                if (err < 0.02) {
+                    if (settledSince < 0) settledSince = now;
+                    if (now - settledSince > 0.5) dipState = 1;
+                } else {
+                    settledSince = -1;
+                }
+                break;
+            case 1:
+                if (rpmFiltered < target * 0.96) {
+                    dipState = 2;
+                    dipStart = now;
+                    dipMin = rpmFiltered;
+                }
+                break;
+            default:
+                dipMin = Math.min(dipMin, rpmFiltered);
+                if (rpmFiltered >= target * 0.98) {
+                    lastDipDepthRpm = target - dipMin;
+                    lastRecoverySec = now - dipStart;
+                    dipCount++;
+                    dipState = 1;
+                } else if (now - dipStart > 5.0) {
+                    lastDipDepthRpm = target - dipMin;
+                    lastRecoverySec = Double.NaN; // never recovered
+                    dipCount++;
+                    dipState = 0;
+                    settledSince = -1;
+                }
+                break;
+        }
+    }
+
+    private void applySuggestedPidf() {
+        if (!steady || Double.isNaN(suggestedF)) {
+            statusMessage = "No steady open-loop reading yet: spin open loop until the speed stops changing";
+            return;
+        }
+        double f = Math.round(suggestedF * 100.0) / 100.0;
+        kF.local(f);
+        kP.local(Math.round(0.1 * f * 100.0) / 100.0);
+        kI.local(0);
+        kD.local(0);
+        statusMessage = String.format("Applied F=%.2f P=%.2f I=0 D=0 from %.0f rpm @ %.0f%% power. Switch to velocity mode (Back).",
+                f, kP.v(), steadyRpm, steadyPower * 100);
+    }
+
+    private void saveCalibration() {
+        ShooterCalibrationStorage.Data data = new ShooterCalibrationStorage.Data();
+        data.pollenCompression = pollenCompression.v();
+        data.nectarCompression = nectarCompression.v();
+        data.hoodPosition = hoodPosition.v();
+        data.targetRpm = targetRpm.v();
+        data.openLoopPower = openLoopPower.v();
+        data.ticksPerRev = ticksPerRev.v();
+        data.p = kP.v();
+        data.i = kI.v();
+        data.d = kD.v();
+        data.f = kF.v();
+        statusMessage = ShooterCalibrationStorage.save(data)
+                ? "CALIBRATION SAVED TO DISK" : "SAVE FAILED (check log)";
+    }
+
+    // ================================================================ telemetry
+    private void publishTelemetry(double now) {
+        double target = targetRpm.v();
+        double power = flywheel != null ? flywheel.getPower() : 0;
+
+        // Graph these in Dashboard (Graph tab -> add targetRpm, actualRpm).
+        multiTelemetry.addData("targetRpm", flywheelOn.v() && velocityMode.v() ? target : 0.0);
+        multiTelemetry.addData("actualRpm", Math.round(rpmFiltered));
+        multiTelemetry.addData("flywheelPower", String.format("%.3f", power));
+
+        multiTelemetry.addData("MODE", velocityMode.v() ? "VELOCITY (closed loop)" : "OPEN LOOP (like OnBot)");
+        multiTelemetry.addData("Flywheel", flywheelOn.v() ? "ON" : "off");
+        multiTelemetry.addData("Command", velocityMode.v()
+                ? String.format("%.0f rpm", target) : String.format("%.0f%% power", openLoopPower.v() * 100));
+        multiTelemetry.addData("Battery V", "%.2f", batteryVolts);
+        multiTelemetry.addData("Raw rpm (unfiltered)", "%.0f", rpmRaw);
+
+        multiTelemetry.addLine("--- OPEN LOOP MEASUREMENT ---");
+        if (steady) {
+            multiTelemetry.addData("STEADY", "%.0f rpm @ %.0f%% power, %.2f V", steadyRpm, steadyPower * 100, steadyVolts);
+            multiTelemetry.addData("Suggested F (32767/tps)", "%.2f", suggestedF);
+            multiTelemetry.addData("Suggested P (0.1 F)", "%.2f", 0.1 * suggestedF);
+            multiTelemetry.addData("Rough max rpm @100%", "%.0f", estMaxRpm);
+            multiTelemetry.addLine("Right Stick Click = apply these, then Back = velocity mode");
+        } else {
+            multiTelemetry.addLine("Not steady yet. Open loop, flywheel on, wait for the speed to settle (1.5 s).");
+        }
+
+        multiTelemetry.addLine("--- VELOCITY TUNING ---");
+        multiTelemetry.addData("PIDF in code", "P %.2f  I %.3f  D %.3f  F %.2f", kP.v(), kI.v(), kD.v(), kF.v());
+        if (hubReadback != null) {
+            boolean match = Math.abs(hubReadback.p - kP.v()) < 0.01 && Math.abs(hubReadback.i - kI.v()) < 0.01
+                    && Math.abs(hubReadback.d - kD.v()) < 0.01 && Math.abs(hubReadback.f - kF.v()) < 0.01;
+            multiTelemetry.addData("PIDF on hub", "P %.2f  I %.3f  D %.3f  F %.2f  [%s]",
+                    hubReadback.p, hubReadback.i, hubReadback.d, hubReadback.f, match ? "SYNCED" : "MISMATCH");
+        }
+        multiTelemetry.addData("Error rpm", "%.0f", velocityMode.v() && flywheelOn.v() ? target - rpmFiltered : 0.0);
+        multiTelemetry.addData("Last ball dip", Double.isNaN(lastDipDepthRpm) ? "none yet (needs a settled run, then a ball)"
+                : String.format("-%.0f rpm, recovered in %s s (%d dips)", lastDipDepthRpm,
+                        Double.isNaN(lastRecoverySec) ? "NEVER" : String.format("%.2f", lastRecoverySec), dipCount));
+        if (flywheelOn.v() && power > 0.05 && Math.abs(rawTps) < 1) {
+            multiTelemetry.addLine(">> WARNING: motor powered but 0 encoder ticks/s. Check the 4-pin encoder cable! <<");
+        }
+        multiTelemetry.addData("Flywheel motor type", motorTypeInfo);
+        multiTelemetry.addData("Encoder ticks/rev used", "%.0f", ticksPerRev.v());
+
+        multiTelemetry.addLine("--- DASHBOARD LINK ---");
+        multiTelemetry.addData("Dashboard", dashStatus);
+        multiTelemetry.addData("Dashboard edits received", dash.editSummary());
+
+        multiTelemetry.addLine("--- SHOOTER ---");
+        multiTelemetry.addData("Active ball", "%s (compression %.3f)", activeBall().name(), activeCompression());
+        multiTelemetry.addData("Pollen / Nectar compression", "%.3f / %.3f", pollenCompression.v(), nectarCompression.v());
+        multiTelemetry.addData("Hood position", "%.3f", hoodPosition.v());
+        multiTelemetry.addData("Servos", servosEngaged ? "ENGAGED" : "RELAXED (unpowered)");
+        multiTelemetry.addData("STATUS", statusMessage);
+
+        multiTelemetry.addLine("--- CONTROLS ---");
+        multiTelemetry.addLine("A/Cross flywheel | Back mode | D-pad U/D rpm or power | D-pad L/R compression");
+        multiTelemetry.addLine("Hold L2 + D-pad: U/D P, L/R D | Hold R2 + D-pad: U/D F, L/R I");
+        multiTelemetry.addLine("R-stick hood | L-stick compression | LB/RB hood +/-0.01 | Y ball | X servos");
+        multiTelemetry.addLine("R-stick click apply suggested PIDF | Options save | B/Circle E-STOP (hold)");
+        multiTelemetry.update();
+    }
+
+    private static double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 }
