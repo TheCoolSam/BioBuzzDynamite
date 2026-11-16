@@ -52,6 +52,8 @@ public final class PedroTuned {
     /** PinpointTuner output. */
     public static PinpointConfig pinpointConfig = new PinpointConfig(config -> {
         config.name.set(PedroConstants.PINPOINT_NAME);
+        // Team believes these are goBILDA swing-arm pods (not yet verified). PinpointTuner asks and overwrites this.
+        config.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_SWINGARM_POD);
         config.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
         config.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
         config.xPodOffset.set(PedroConstants.PLACEHOLDER_X_POD_OFFSET_INCHES);
