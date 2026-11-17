@@ -12,6 +12,8 @@ import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+
 import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
 import org.firstinspires.ftc.teamcode.scoring.ShooterCalibrationStorage;
 
@@ -102,6 +104,8 @@ public class TurretShooterBenchOpMode extends OpMode {
 
     // measurement
     private double rpmRaw = 0, rpmFiltered = 0, rawTps = 0;
+    private double motorAmps = 0, peakAmps = 0, lastCurrentSec = -10;
+    private boolean motorOverCurrent = false;
     private double steadyAnchor = Double.NaN, steadySince = 0;
     private boolean steady = false;
     private double steadyRpm = 0, steadyPower = 0, steadyVolts = Double.NaN;
@@ -436,6 +440,14 @@ public class TurretShooterBenchOpMode extends OpMode {
             batteryVolts = battery.getVoltage();
             lastBatterySec = now;
         }
+        if (now - lastCurrentSec > 0.2) {
+            try {
+                motorAmps = flywheel.getCurrent(CurrentUnit.AMPS);
+                motorOverCurrent = flywheel.isOverCurrent();
+                peakAmps = Math.max(peakAmps, motorAmps);
+            } catch (RuntimeException ignored) { }
+            lastCurrentSec = now;
+        }
         if (now - lastReadbackSec > 0.5) {
             try { hubReadback = flywheel.getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER); }
             catch (RuntimeException ignored) { }
@@ -559,6 +571,17 @@ public class TurretShooterBenchOpMode extends OpMode {
                 ? String.format("%.0f rpm", target) : String.format("%.0f%% power", openLoopPower.v() * 100));
         multiTelemetry.addData("Battery V", "%.2f", batteryVolts);
         multiTelemetry.addData("Raw rpm (unfiltered)", "%.0f", rpmRaw);
+        multiTelemetry.addData("motorAmps", String.format("%.2f", motorAmps));
+        multiTelemetry.addData("Motor current (peak this run)", "%.2f A now, %.2f A peak%s", motorAmps, peakAmps,
+                motorOverCurrent ? "  >> HUB OVER-CURRENT <<" : "");
+        // The hub clamps its velocity output at +/-32767. If F * target already exceeds that, the
+        // controller is just pinned at 100% power and the PIDF can no longer help.
+        double demandOutput = kF.v() * target * ticksPerRev.v() / 60.0;
+        if (velocityMode.v() && flywheelOn.v() && demandOutput > HUB_FULL_SCALE) {
+            multiTelemetry.addLine(String.format(
+                    ">> SATURATED: F x target asks for %.0f%% power (max 100%%). Lower F, or lower the target. <<",
+                    100.0 * demandOutput / HUB_FULL_SCALE));
+        }
 
         multiTelemetry.addLine("--- OPEN LOOP MEASUREMENT ---");
         if (steady) {
