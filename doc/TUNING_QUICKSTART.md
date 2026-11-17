@@ -14,6 +14,11 @@ FTC Dashboard and show on the DS screen whether Dashboard edits are really arriv
 
    `Dashboard edits received: 1 edits (last: HOOD_POSITION = 0.4, 1.2 s ago)`
 
+   This line is on the INIT screen too (Shooter Bench), so you can prove the link before pressing
+   START. On the INIT screen also check `Hardware: flywheel OK | hood OK | compression OK`.
+   Verified on the real Control Hub on 2026-11-16: an edit typed in the browser was still there after a
+   full page reload, so it reached the robot.
+
    - Count went up: Dashboard works, tune from the web page.
    - Count did not go up: the edit never left the browser. You did not press Enter/check, the laptop
      is not on the robot Wi-Fi, or the page is stale (reload it). The gamepad still works either way.
@@ -40,6 +45,15 @@ guessing and starts P at 0.1 F.
    Use it to compare settings: smaller dip and shorter recovery is better.
 8. **Options** (or tick `SAVE_CALIBRATION`) saves everything to the Control Hub. Copy the final
    P/I/D/F into `RobotHardwareConfig.flywheelPidf`.
+
+Before the first run (Hood Servo Test robot configuration must be active on the Driver Station):
+- Config names needed: motor `flywheel`, servos `hood` and `compression`, Ethernet device `limelight`.
+- Pressing START powers both servos and moves them to the saved hood and compression positions
+  immediately. Keep hands and wires clear and make sure the linkages are free.
+- The flywheel never spins until you press A/Cross (or tick `FLYWHEEL_ON`). Hold B to stop.
+- The hub config currently labels the flywheel as a 60 rpm, 2786 ticks/rev motor. If the real flywheel
+  motor is a 28 ticks/rev bare motor, leave `TICKS_PER_REV` at 28 and ignore that line, but fix the
+  motor type in the configuration when you can.
 
 Check these lines if anything looks wrong:
 - `Flywheel motor type`: the ticks per rev the robot configuration thinks the motor has. If it is not

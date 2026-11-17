@@ -186,6 +186,11 @@ public class TurretShooterBenchOpMode extends OpMode {
         multiTelemetry.addData("Dashboard", dashStatus);
         multiTelemetry.addData("Config panel", "Open http://192.168.43.1:8080/dash -> Configuration -> \"%s\"", DASH_CATEGORY);
         multiTelemetry.addData("Flywheel motor type", motorTypeInfo);
+        multiTelemetry.addData("Hardware", "flywheel %s | hood %s | compression %s",
+                flywheel != null ? "OK" : "MISSING", hood != null ? "OK" : "MISSING",
+                compression != null ? "OK" : "MISSING");
+        // Prove the Dashboard link BEFORE pressing START: edit any value + Enter, this count must rise.
+        multiTelemetry.addData("Dashboard edits received", dash.editSummary());
         multiTelemetry.addData("Status", statusMessage);
         multiTelemetry.update();
         dash.pushIfDirty();
