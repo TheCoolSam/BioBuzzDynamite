@@ -33,8 +33,11 @@ F is about `32767 / max ticks per second` and P is about 10% of F. P = 15 means 
 asks for 100% power, so the wheel hunts and no P ever looks right. This tuner measures F instead of
 guessing and starts P at 0.1 F.
 
-1. Start in **OPEN LOOP** (like the OnBot test). Cross/A spins at `OPEN_LOOP_POWER` (starts at 30%).
-2. D-pad up/down raises the power in 5% steps. Run at the power you normally shoot at (about 90%).
+1. Start in **OPEN LOOP** (like the OnBot test). Cross/A spins at `OPEN_LOOP_POWER` (starts at 90%,
+   the power the OnBot test used with the 6000 rpm goBILDA motor). Lower it with D-pad down if you want
+   to ease in.
+2. D-pad up/down changes the power in 5% steps. Run at the power you normally shoot at (about 90%).
+   Expect about 5000 to 5500 rpm and a Suggested F near 11 to 12 for this motor.
 3. After the speed holds still for 1.5 s the screen shows `STEADY`, the real rpm, battery voltage,
    a **Suggested F** and a rough max rpm. This replaces the "about 5000 rpm" estimate with a measurement.
 4. **Right stick click** (or tick `APPLY_SUGGESTED_PIDF`): loads F, P = 0.1 F, I = D = 0.

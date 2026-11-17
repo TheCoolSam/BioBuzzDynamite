@@ -56,7 +56,7 @@ public class TurretShooterBenchOpMode extends OpMode {
     // ---------------------------------------------------------------- tunables (shown in Dashboard)
     private final DashboardTunables dash = new DashboardTunables(DASH_CATEGORY);
     private final DashboardTunables.Num targetRpm = dash.num("TARGET_RPM", 3000.0);
-    private final DashboardTunables.Num openLoopPower = dash.num("OPEN_LOOP_POWER", 0.30);
+    private final DashboardTunables.Num openLoopPower = dash.num("OPEN_LOOP_POWER", 0.90);
     private final DashboardTunables.Num kP = dash.num("P", 1.25);
     private final DashboardTunables.Num kI = dash.num("I", 0.0);
     private final DashboardTunables.Num kD = dash.num("D", 0.0);

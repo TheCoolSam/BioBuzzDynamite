@@ -29,7 +29,7 @@ public final class ShooterCalibrationStorage {
         public double nectarCompression = 0.50;
         public double hoodPosition = 0.35;
         public double targetRpm = 3000.0;
-        public double openLoopPower = 0.30;
+        public double openLoopPower = 0.90; // the power the team ran the 6000 rpm flywheel at in OnBot Java
         public double ticksPerRev = 28.0;
         // Starting point only: F ~= 32767 / max ticks per second, P ~= 0.1 * F. Measure F on the bench.
         public double p = 1.25;
