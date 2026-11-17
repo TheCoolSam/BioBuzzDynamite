@@ -546,6 +546,10 @@ public class TurretShooterBenchOpMode extends OpMode {
 
         // Graph these in Dashboard (Graph tab -> add targetRpm, actualRpm).
         multiTelemetry.addData("targetRpm", flywheelOn.v() && velocityMode.v() ? target : 0.0);
+        if (!velocityMode.v()) {
+            multiTelemetry.addLine("targetRpm stays 0 in OPEN LOOP: there is no target, the wheel just runs at "
+                    + String.format("%.0f%%", openLoopPower.v() * 100) + " power. Press Back/Share for VELOCITY mode.");
+        }
         multiTelemetry.addData("actualRpm", Math.round(rpmFiltered));
         multiTelemetry.addData("flywheelPower", String.format("%.3f", power));
 
