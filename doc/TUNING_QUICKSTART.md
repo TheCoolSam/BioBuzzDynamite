@@ -72,9 +72,36 @@ Old saved PIDF/RPM values from the first version of this tuner are ignored autom
 Assumes the Limelight is mounted **on the turret**: `tx = 0` means the shooter points at the tag.
 If it is on the chassis this is not the right controller.
 
+### BIOBUZZ AprilTags (Competition Manual section 9.9)
+
+- 36h11 family, **3.25 in = 82.55 mm** (set the Limelight `Marker Size` to 82.55).
+- Four 4-tag clusters, one under each CELL. They move when the HIVE tips, so the tag you see changes
+  during a match. They are **not** for field localization.
+
+| CELL | Tag IDs |
+|---|---|
+| Red, far side (opposite audience) | 30, 31, 32, 33 |
+| Red, audience side | 34, 35, 36, 37 |
+| Blue, audience side | 38, 39, 40, 41 |
+| Blue, far side (opposite audience) | 42, 43, 44, 45 |
+
+Red alliance targets **30 to 37**, blue alliance targets **38 to 45**. Verify these against the
+current manual (Section 9.9) before competition. The manual is updated through TU releases.
+
+How to make sure the Limelight looks for the right tags (the pipeline's ID Filters box decides what the
+robot is allowed to see; a tag outside the list is drawn on the stream but never reported):
+1. Open the Limelight page, pipeline 0, **Configuration** tab (`http://192.168.43.1:5801` when your
+   laptop is on the Control Hub Wi-Fi).
+2. Family `AprilTag Classic 36h11`, Marker Size `82.55`.
+3. **ID Filters**: red `30,31,32,33,34,35,36,37`, blue `38,39,40,41,42,43,44,45`. Or leave it blank and pick
+   in code with `TAG_ID_(-1_any)`. (`20,24` in that box is a leftover from last season.)
+4. Check: show tag 34 (red) or 38 (blue) on a phone. The stream draws it and `tx`/`ty`/`ta` move.
+   Then show a tag outside your list: it must NOT produce `tx`/`ty`.
+5. Always re-check it after you reload a pipeline or swap Limelights.
+
 Works today, with the turret not attached:
-1. In the Limelight web UI (`http://limelight.local:5801`), set pipeline 0 to **AprilTag** and note
-   the goal tag ID. Set `TAG_ID_(-1_any)` in Dashboard to that ID (or leave -1 for any tag).
+1. In the Limelight web UI, set pipeline 0 to **AprilTag** and use the IDs above. Set `TAG_ID_(-1_any)`
+   in Dashboard to one of them, or leave -1 for any tag in the filter.
 2. INIT the OpMode. `Limelight` section must show `Connected / running: true / true` and frames counting up.
 3. Hold the tag in view and move it left and right. `txDeg` must follow, `AIM STATE` must go
    `TRACKING` then `LOCKED` as you centre it, and `demand` must be positive on one side and negative
