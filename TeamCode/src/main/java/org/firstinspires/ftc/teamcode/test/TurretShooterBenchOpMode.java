@@ -17,12 +17,18 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
 import org.firstinspires.ftc.teamcode.planning.pickup.BallType;
+import org.firstinspires.ftc.teamcode.scoring.FlywheelAutoTuner;
 import org.firstinspires.ftc.teamcode.scoring.ShooterCalibrationStorage;
 
 /**
  * Shooter and hood bench tuner.
  *
- * <h3>How the flywheel is tuned (do it in this order)</h3>
+ * <h3>Fastest: auto-tune</h3>
+ * Set TARGET_RPM to the shot speed, press <b>L3</b> (left stick click), keep hands clear for about
+ * 45 s. It sweeps open-loop power to find F and the top speed, tries several P values on a speed step,
+ * checks I while holding speed, then loads the winners. Press <b>Options</b> to save. L3 or Circle stops it.
+ *
+ * <h3>How the flywheel is tuned by hand (do it in this order)</h3>
  * <ol>
  *   <li><b>OPEN LOOP</b> (starts here, like the OnBot test): Cross/A spins at OPEN_LOOP_POWER.
  *       D-pad up/down changes the power. When the speed stops changing the tuner prints the
@@ -76,6 +82,8 @@ public class TurretShooterBenchOpMode extends OpMode {
     // One-shot buttons: tick them in Dashboard; they reset themselves.
     private final DashboardTunables.Flag actApplySuggested = dash.flag("APPLY_SUGGESTED_PIDF", false);
     private final DashboardTunables.Flag actSave = dash.flag("SAVE_CALIBRATION", false);
+    /** Same as L3 (left stick click): start or stop the hands-off PIDF auto-tune. */
+    private final DashboardTunables.Flag actAutoTune = dash.flag("AUTO_TUNE_PIDF", false);
     private String dashStatus = "NOT CHECKED";
 
     // ---------------------------------------------------------------- hardware / state
@@ -91,7 +99,11 @@ public class TurretShooterBenchOpMode extends OpMode {
     private final Edge eCross = new Edge(), eSquare = new Edge(), eTriangle = new Edge(),
             eBack = new Edge(), eOptions = new Edge(), eUp = new Edge(), eDown = new Edge(),
             eLeft = new Edge(), eRight = new Edge(), eLb = new Edge(), eRb = new Edge(),
-            eRsb = new Edge(), eStop = new Edge();
+            eRsb = new Edge(), eStop = new Edge(), eLsb = new Edge();
+
+    // PIDF auto-tune (L3). While it runs it owns the flywheel; the user's target rpm is restored after.
+    private FlywheelAutoTuner autoTune;
+    private double userTargetRpm = Double.NaN;
 
     private final ElapsedTime loopTimer = new ElapsedTime();
     private final ElapsedTime clock = new ElapsedTime();
@@ -227,6 +239,7 @@ public class TurretShooterBenchOpMode extends OpMode {
                 disableServos();
                 statusMessage = "EMERGENCY STOP (servos relaxed, flywheel off)";
             }
+            if (autoTune != null && autoTune.running()) { autoTune.abort("emergency stop"); finishAutoTune(); }
             if (flywheel != null) flywheel.setPower(0);
             measure(now);
             publishTelemetry(now);
@@ -236,7 +249,14 @@ public class TurretShooterBenchOpMode extends OpMode {
         eStop.rising(false);
 
         handleDashboardActions();
-        handleGamepad(dt);
+        boolean autoTuneButton = eLsb.rising(gamepad1.left_stick_button) || actAutoTune.v();
+        actAutoTune.local(false);
+        if (autoTuneButton) toggleAutoTune(now);
+        if (autoTune != null && autoTune.running()) {
+            stepAutoTune(now);          // the tuner drives the flywheel; other flywheel buttons are ignored
+        } else {
+            handleGamepad(dt);
+        }
         applyServos();
         applyPidfIfChanged();
         applyFlywheel();
@@ -528,6 +548,57 @@ public class TurretShooterBenchOpMode extends OpMode {
         }
     }
 
+    // ================================================================ PIDF auto-tune
+    private void toggleAutoTune(double now) {
+        if (autoTune != null && autoTune.running()) {
+            autoTune.abort("L3 pressed");
+            finishAutoTune();
+            return;
+        }
+        if (flywheel == null) { statusMessage = "Auto-tune needs the flywheel motor"; return; }
+        try {
+            autoTune = new FlywheelAutoTuner(targetRpm.v(), ticksPerRev.v(), MAX_RPM_LIMIT);
+        } catch (IllegalArgumentException e) {
+            statusMessage = "Auto-tune: set TARGET_RPM to your shot speed first (" + e.getMessage() + ")";
+            return;
+        }
+        userTargetRpm = targetRpm.v();
+        autoTune.start(now);
+        statusMessage = "AUTO-TUNE running (~45 s). Keep hands clear of the flywheel. L3 or Circle stops it.";
+    }
+
+    private void stepAutoTune(double now) {
+        FlywheelAutoTuner.Output o = autoTune.update(now, rpmFiltered, batteryVolts);
+        if (!autoTune.running()) { finishAutoTune(); return; }
+        flywheelOn.local(o.on);
+        velocityMode.local(o.velocityMode);
+        if (o.velocityMode) {
+            targetRpm.local(o.targetRpm);
+            kP.local(o.p);
+            kI.local(o.i);
+            kF.local(o.f);
+            kD.local(0);
+        } else {
+            openLoopPower.local(o.power);
+        }
+    }
+
+    private void finishAutoTune() {
+        flywheelOn.local(false);
+        if (flywheel != null) flywheel.setPower(0);
+        if (Double.isFinite(userTargetRpm)) targetRpm.local(userTargetRpm);
+        if (autoTune.phase() == FlywheelAutoTuner.Phase.DONE) {
+            kP.local(round2(autoTune.resultP()));
+            kI.local(round2(autoTune.resultI()));
+            kF.local(round2(autoTune.resultF()));
+            kD.local(0);
+            velocityMode.local(true);
+        }
+        statusMessage = "AUTO-TUNE " + autoTune.message();
+    }
+
+    private static double round2(double v) { return Math.round(v * 100.0) / 100.0; }
+
     private void applySuggestedPidf() {
         if (!steady || Double.isNaN(suggestedF)) {
             statusMessage = "No steady open-loop reading yet: spin open loop until the speed stops changing";
@@ -562,6 +633,13 @@ public class TurretShooterBenchOpMode extends OpMode {
     private void publishTelemetry(double now) {
         double target = targetRpm.v();
         double power = flywheel != null ? flywheel.getPower() : 0;
+
+        if (autoTune != null) {
+            multiTelemetry.addData("AUTO-TUNE", "%s: %s", autoTune.phase(), autoTune.message());
+            for (String line : autoTune.pReport()) multiTelemetry.addLine("  " + line);
+        } else {
+            multiTelemetry.addLine("AUTO-TUNE: set TARGET_RPM to your shot speed, then press L3 (left stick click). ~45 s, hands clear.");
+        }
 
         // Graph these in Dashboard (Graph tab -> add targetRpm, actualRpm).
         multiTelemetry.addData("targetRpm", flywheelOn.v() && velocityMode.v() ? target : 0.0);
@@ -641,7 +719,7 @@ public class TurretShooterBenchOpMode extends OpMode {
         multiTelemetry.addLine("A/Cross flywheel | Back mode | D-pad U/D rpm or power | D-pad L/R compression");
         multiTelemetry.addLine("Hold L2 + D-pad: U/D P, L/R D | Hold R2 + D-pad: U/D F, L/R I");
         multiTelemetry.addLine("R-stick hood | L-stick compression | LB/RB hood +/-0.01 | Y ball | X servos");
-        multiTelemetry.addLine("R-stick click apply suggested PIDF | Options save | B/Circle E-STOP (hold)");
+        multiTelemetry.addLine("L3 auto-tune PIDF | R-stick click apply suggested PIDF | Options save | B/Circle E-STOP (hold)");
         multiTelemetry.update();
     }
 

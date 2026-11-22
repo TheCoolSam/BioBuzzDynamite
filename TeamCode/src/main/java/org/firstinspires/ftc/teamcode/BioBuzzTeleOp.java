@@ -43,6 +43,12 @@ public class BioBuzzTeleOp extends OpMode {
     private boolean previousHit, previousMiss, previousTip, previousNoTip;
     private boolean previousLong, previousShort, previousLeft, previousRight, previousTrimReset;
     protected ShotTrim shotTrim;
+    /**
+     * Intake latch: tap the touchpad and the intake keeps running (no holding R2) until the robot is
+     * full, then turns itself off. Tap again to stop early. Off at the start of every match.
+     */
+    private boolean autoIntake = false;
+    private boolean previousTouchpad;
     private int previousPieceCount = 0;
     private double lastAimRumbleTime = 0;
 
@@ -221,12 +227,24 @@ public class BioBuzzTeleOp extends OpMode {
         // Intake: R2 (Right Trigger) only. Auto-stops when inventory is full. (L2 is slow mode only:
         // it used to run the intake too past half travel, so slowing down also started the intake.)
         boolean full = robot != null && robot.inventory != null && robot.inventory.pieces().size() >= MAX_INVENTORY_CAPACITY;
-        input.intake = gamepad1.right_trigger > INTAKE_TRIGGER_THRESHOLD && !full;
+        boolean manualIntake = gamepad1.right_trigger > INTAKE_TRIGGER_THRESHOLD;
+        // Intake latch: touchpad tap starts it, it stops by itself when full (or on another tap).
+        boolean touchpad = gamepad1.touchpad;
+        if (touchpad && !previousTouchpad) {
+            autoIntake = !autoIntake;
+            gamepad1.rumbleBlips(autoIntake ? 2 : 1);
+        }
+        previousTouchpad = touchpad;
+        if (full && autoIntake) {
+            autoIntake = false;   // full: latch releases, so the intake is never left running for nothing
+        }
+        input.intake = (manualIntake || (autoIntake && !shootPressed)) && !full;
 
-        // Smart auto-unwind when idle or moving without an active shot, plus manual D-pad right
+        // Smart auto-unwind when idle or moving without an active shot, plus manual D-pad right.
+        // Uses the manual intake only, so a running auto-intake does not block it.
         boolean shouldAutoUnwind = robot != null && robot.snapshot != null
                 && Math.abs(robot.snapshot.turretAngle) > 2.0
-                && !input.shoot && !input.intake && !holdPickup
+                && !input.shoot && !manualIntake && !holdPickup
                 && robot.scoring.state() == ScoringController.State.IDLE;
         input.unwindAssist = gamepad1.dpad_right || shouldAutoUnwind;
         if (!holdPickup || !input.enabled || input.cancel || input.shoot || robot == null
@@ -391,6 +409,7 @@ public class BioBuzzTeleOp extends OpMode {
             return;
         }
 
+        telemetry.addData("Intake", autoIntake ? "RUNNING until full (touchpad = stop)" : "off (hold R2, or tap touchpad to run until full)");
         if (shotTrim != null) telemetry.addData("Shot trims (driver 2)", shotTrim.describe());
         telemetry.addData("Auto Pose Handoff", PoseStorage.hasPose() ? "ACTIVE" : "STANDBY");
         telemetry.addData("Scoring", robot.scoring.state());
@@ -413,7 +432,7 @@ public class BioBuzzTeleOp extends OpMode {
 
         telemetry.addLine("\n--- DRIVER 1 ---");
         telemetry.addLine("L-stick: drive (field-centric) | R-stick: turn | hold L2: slow");
-        telemetry.addLine("R2: intake (stops when full) | R1 or Cross: shoot (tap = 1, hold = burst)");
+        telemetry.addLine("R2 (hold): intake | Touchpad tap: intake until full | R1 or Cross: shoot (tap = 1, hold = all)");
         telemetry.addLine("Hold L1 / Square: pickup assist | D-pad right: unwind turret");
         telemetry.addLine("Hold Circle: STOP | Triangle (sticks centered, robot facing away from you): reset heading");
         telemetry.addLine("--- DRIVER 2: call every shot ---");

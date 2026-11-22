@@ -47,7 +47,7 @@ foreach ($name in @('SimpleAutoPlan', 'SimpleAutoRunner', 'FlywheelReadyDetector
 foreach ($name in @('PedroManualDrive', 'PedroMappedReading', 'PedroPoseAdapter')) {
     $sources += Join-Path $sourceRoot ('pedro/' + $name + '.java')
 }
-$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios', 'MovingShotScenarios', 'LauncherCalibrationScenarios', 'CompetitionReadinessScenarios', 'VisionAimScenarios', 'AimPointScenarios', 'SimpleAutoScenarios', 'ShotTrimScenarios')
+$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios', 'MovingShotScenarios', 'LauncherCalibrationScenarios', 'CompetitionReadinessScenarios', 'VisionAimScenarios', 'AimPointScenarios', 'SimpleAutoScenarios', 'ShotTrimScenarios', 'FlywheelAutoTunerScenarios')
 foreach ($scenario in $scenarios) {
     $sources += Join-Path $sourceRoot ('test/' + $scenario + '.java')
 }
