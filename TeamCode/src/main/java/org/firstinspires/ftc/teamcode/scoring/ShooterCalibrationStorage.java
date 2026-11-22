@@ -22,7 +22,8 @@ import java.util.Properties;
  */
 public final class ShooterCalibrationStorage {
     public static final String FILE_NAME = "biobuzz_shooter_calibration.properties";
-    public static final int SCHEMA = 2;
+    // 3: speed loop moved to software with battery compensation; old saved P/I (P 0.1 * F, I 0) are discarded.
+    public static final int SCHEMA = 3;
 
     public static class Data {
         public double pollenCompression = 0.30;
@@ -31,9 +32,10 @@ public final class ShooterCalibrationStorage {
         public double targetRpm = 3000.0;
         public double openLoopPower = 0.90; // the power the team ran the 6000 rpm flywheel at in OnBot Java
         public double ticksPerRev = 28.0;
-        // Starting point only: F ~= 32767 / max ticks per second, P ~= 0.1 * F. Measure F on the bench.
-        public double p = 1.25;
-        public double i = 0.0;
+        // Starting point only (software speed loop, hub units): F ~= 32767 * power / tps at 12 V,
+        // P and I ~= 1.2 * F. Measure F on the bench.
+        public double p = 15.0;
+        public double i = 15.0;
         public double d = 0.0;
         public double f = 12.5;
         /** True when the file on disk predates {@link #SCHEMA} and its PIDF/RPM numbers were discarded. */
@@ -56,8 +58,12 @@ public final class ShooterCalibrationStorage {
                     data.targetRpm = read(props, "targetRpm", data.targetRpm);
                     data.openLoopPower = read(props, "openLoopPower", data.openLoopPower);
                     data.ticksPerRev = read(props, "ticksPerRev", data.ticksPerRev);
-                    data.p = read(props, "p", data.p);
-                    data.i = read(props, "i", data.i);
+                    if (schema >= 3) {
+                        data.p = read(props, "p", data.p);
+                        data.i = read(props, "i", data.i);
+                    } else {
+                        data.legacyPidfDiscarded = true;   // F still valid; P/I were sized for the hub loop
+                    }
                     data.d = read(props, "d", data.d);
                     data.f = read(props, "f", data.f);
                 } else {

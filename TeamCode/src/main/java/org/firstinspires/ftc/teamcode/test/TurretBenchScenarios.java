@@ -100,7 +100,9 @@ public final class TurretBenchScenarios {
         TurretState invalid = aim(0, 0); invalid.turretAngle = Double.NaN;
         check(controller.calculate(invalid).turretMotorPower == 0, "T9 fault zero");
         check(!memory.getBoolean(controller), "T9 derivative memory discarded");
-        TurretCommand recovered = controller.calculate(aim(-179, -150));
+        // Measured just past the CW operating limit, so the fresh P term is not clipped by the power cap.
+        TurretCommand recovered = controller.calculate(aim(-179,
+                Math.toDegrees(TurretConstants.OPERATING_MIN_RAD) - 3.0));
         check(recovered.desiredTurretAngle < 0 && recovered.requestedChassisOmega < 0,
                 "T9 old branch / unwind discarded");
         near(recovered.turretMotorPower, TurretConstants.KP * recovered.turretAngleError,

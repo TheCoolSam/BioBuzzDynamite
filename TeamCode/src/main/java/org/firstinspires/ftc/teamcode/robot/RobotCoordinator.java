@@ -36,6 +36,13 @@ public final class RobotCoordinator {
     public void setShotLogging(String revision,String runId) {journal=new ShotJournal(revision,runId);}
     public void setShotTipModel(TipModel model) {shotTipModel=model;}
     public void setFeedStagesIsolated(boolean measuredIsolation) {feedStagesIsolated=measuredIsolation;}
+    private ShotTrim shotTrim;
+    private double trimMaxRpm=Double.NaN;
+    /** Driver-2 trims on top of the calibrated shot; the trimmed speed never exceeds maxRpm. */
+    public void setShotTrim(ShotTrim trim,double maxRpm) {shotTrim=trim;trimMaxRpm=maxRpm;}
+    public ShotTrim shotTrim() {return shotTrim;}
+    /** Range (inches) of the latest shot solution, for driver-2 trims; NaN without a target. */
+    public double lastShotRangeInches=Double.NaN;
     private double pivotForward,pivotLeft;
     private MotionShotSolver movingShots;
     private MotionShotSolver.StationarySettings stationaryShots;
@@ -235,6 +242,12 @@ public final class RobotCoordinator {
                     aimY=pivot.getFieldY()+shotSolution.equivalentRange*Math.sin(bearingNow);
                 }
             }
+            double aimTrim=shotTrim==null?0:shotTrim.aimRad();
+            if(aimTrim!=0&&Double.isFinite(aimX)&&Double.isFinite(aimY)) {
+                // Driver-2 aim trim: turn the aim point about the turret pivot.
+                double dx=aimX-pivot.getFieldX(),dy=aimY-pivot.getFieldY(),c=Math.cos(aimTrim),s=Math.sin(aimTrim);
+                aimX=pivot.getFieldX()+dx*c-dy*s;aimY=pivot.getFieldY()+dx*s+dy*c;
+            }
             TurretCommand aim=targetFresh&&healthView.yawCommandable?turret.calculate(TurretStateAdapter.toTurretState(pivot,
                     snapshot.turretAngle,snapshot.turretVelocity,aimX,aimY,dt,now)):null;
             if(!targetFresh||!healthView.yawCommandable)turret.reset();
@@ -278,7 +291,7 @@ public final class RobotCoordinator {
                     shot.releaseSec=releasing&&Double.isFinite(committedReleaseSec)?committedReleaseSec:shotSolution.releaseSec;
                     if(releasing&&Double.isFinite(committedReleaseSec))shotSolution=shotSolution.atRelease(committedReleaseSec);
                     shot.releaseUncertaintySec=shotSolution.selection.releaseUncertaintySec;
-                    double error=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-snapshot.robot.getHeadingRad()-snapshot.turretAngle));
+                    double error=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing+aimTrim-snapshot.robot.getHeadingRad()-snapshot.turretAngle));
                     shotMissBoundInches+=shot.rangeInches*Math.sin(Math.min(Math.PI/2,error));
                     shot.stationary &= shotMissBoundInches<=Math.min(stationaryShots.maxMiss,effectiveTarget.lipClearance);
                     shot.aimReady &= error<=aimTolerance;
@@ -296,7 +309,7 @@ public final class RobotCoordinator {
                     shot.releaseUncertaintySec=shotSolution.selection.hasReleaseMeasurement()?shotSolution.selection.releaseUncertaintySec:movingShots.settings.releaseUncertaintySec;
                     double futureTurret=snapshot.turretAngle+snapshot.turretVelocity*shot.releaseDelaySec;
                     double physicalBearing=shotSolution.releaseHeading+futureTurret;
-                    double aimError=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing-physicalBearing));
+                    double aimError=Math.abs(AngleUtil.wrapRadians(shotSolution.bearing+aimTrim-physicalBearing));
                     shotMissBoundInches+=shotSolution.equivalentRange*Math.sin(Math.min(Math.PI/2,aimError));
                     double allowedMiss=effectiveTarget.internalPoint?Math.min(movingShots.settings.maxMissInches,effectiveTarget.lipClearance):movingShots.settings.maxMissInches;
                     if(shot.motionReady&&(!Double.isFinite(allowedMiss)||shotMissBoundInches>allowedMiss)) {
@@ -319,6 +332,11 @@ public final class RobotCoordinator {
                         shotSolution.releaseSec+selected.flightSec+uncertainty,scoring.inFlight()));
                 if(Double.isFinite(probability)&&probability>=0&&probability<=1)shotTipProbability=probability;
             }
+            // Driver-2 speed trim: the scoring logic keeps working in calibrated rpm, so its "speed ready"
+            // check sees the trimmed wheel speed scaled back, and the motor command is scaled up below.
+            lastShotRangeInches=shot.rangeInches;
+            double rpmScale=shotTrim==null?1.0:shotTrim.rpmScale(shot.rangeInches);
+            if(rpmScale!=1.0&&Double.isFinite(shot.rpm))shot.rpm=shot.rpm/rpmScale;
             ScoringController.Output output=scoring.update(shot);
             if(shotSolution!=null&&!releasing&&scoring.state()==ScoringController.State.FEED_ONE&&output.feeder>0)
                 committedReleaseSec=shotSolution.releaseSec;
@@ -334,6 +352,10 @@ public final class RobotCoordinator {
                 ShotRecipe commanded=scoring.currentRecipe();
                 if(commanded!=null&&commanded.physical()&&healthView.launcherCommandable) {command.pitchRad=commanded.pitchRad;command.gapMm=commanded.gapMm;}
                 command.rpm=healthView.launcherCommandable?output.rpm:0;
+                if(rpmScale!=1.0&&command.rpm>0) {
+                    command.rpm*=rpmScale;
+                    if(Double.isFinite(trimMaxRpm))command.rpm=Math.min(command.rpm,trimMaxRpm);
+                }
                 command.hood=healthView.launcherCommandable?output.hood:Double.NaN;
                 command.compression=healthView.launcherCommandable?output.compression:Double.NaN;
                 command.transfer=healthView.launcherCommandable?output.transfer:0;

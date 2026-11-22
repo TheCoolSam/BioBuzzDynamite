@@ -99,10 +99,12 @@ public final class SafetyRegressionScenarios {
                 check(command.requestedChassisOmega * side > 0, "unwind keeps direction");
                 legal(command);
             }
-            TurretState recovered = aim(179 * side, 100 * side);
-            recovered.robotHeading = Math.toRadians(79 * side);
+            // A legal interior aim: half the unwind exit angle, so it fits the CAD yaw range.
+            double interior = 0.5 * Math.toDegrees(TurretConstants.UNWIND_EXIT_RAD);
+            TurretState recovered = aim(179 * side, interior * side);
+            recovered.robotHeading = Math.toRadians((179 - interior) * side);
             TurretCommand ordinary = controller.calculate(recovered);
-            near(ordinary.desiredTurretAngle, Math.toRadians(100 * side), "ordinary tracking resumes");
+            near(ordinary.desiredTurretAngle, Math.toRadians(interior * side), "ordinary tracking resumes");
             check(!ordinary.unwindActive && ordinary.targetReachable, "branch releases inside exit region");
             legal(ordinary);
             // A latched rear branch does not switch at the opposite operating
@@ -114,10 +116,10 @@ public final class SafetyRegressionScenarios {
             check(opposite.requestedChassisOmega * side > 0, "opposite edge keeps yaw direction");
             // A legal front-sector move can resume while the measured turret is
             // still settling; the latch releases only after the encoder follows.
-            TurretCommand settling = controller.calculate(aim(100 * side, 150 * side));
-            near(settling.desiredTurretAngle, Math.toRadians(100 * side), "legal interior aim resumes");
+            TurretCommand settling = controller.calculate(aim(interior * side, 150 * side));
+            near(settling.desiredTurretAngle, Math.toRadians(interior * side), "legal interior aim resumes");
             check(settling.unwindActive, "does not release before measured turret recovers");
-            check(!controller.calculate(aim(100 * side, 100 * side)).unwindActive, "measured recovery releases");
+            check(!controller.calculate(aim(interior * side, interior * side)).unwindActive, "measured recovery releases");
             TurretCommand otherSide = controller.calculate(aim(-150 * side, -150 * side));
             check(otherSide.requestedChassisOmega * side < 0, "released branch can select other side");
             controller.reset();

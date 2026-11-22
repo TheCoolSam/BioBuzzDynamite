@@ -6,6 +6,8 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import org.firstinspires.ftc.teamcode.robot.FlywheelPair;
 import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.Servo;
@@ -59,8 +61,8 @@ public class TurretShooterBenchOpMode extends OpMode {
     private final DashboardTunables dash = new DashboardTunables(DASH_CATEGORY);
     private final DashboardTunables.Num targetRpm = dash.num("TARGET_RPM", 3000.0);
     private final DashboardTunables.Num openLoopPower = dash.num("OPEN_LOOP_POWER", 0.90);
-    private final DashboardTunables.Num kP = dash.num("P", 1.25);
-    private final DashboardTunables.Num kI = dash.num("I", 0.0);
+    private final DashboardTunables.Num kP = dash.num("P", 15.0);
+    private final DashboardTunables.Num kI = dash.num("I", 15.0);
     private final DashboardTunables.Num kD = dash.num("D", 0.0);
     private final DashboardTunables.Num kF = dash.num("F", 12.5);
     private final DashboardTunables.Num ticksPerRev = dash.num("TICKS_PER_REV", 28.0);
@@ -78,7 +80,7 @@ public class TurretShooterBenchOpMode extends OpMode {
 
     // ---------------------------------------------------------------- hardware / state
     private MultipleTelemetry multiTelemetry;
-    private DcMotorEx flywheel;
+    private FlywheelPair flywheel;
     private Servo hood;
     private Servo compression;
     private VoltageSensor battery;
@@ -153,17 +155,20 @@ public class TurretShooterBenchOpMode extends OpMode {
         dashStatus = dash.register();
 
         try {
-            flywheel = hardwareMap.get(DcMotorEx.class, "flywheel");
+            flywheel = FlywheelPair.map(hardwareMap, "flywheel", FlywheelPair.SECOND_NAME);
             flywheel.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
             flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            flywheel.setDirection(DcMotorSimple.Direction.FORWARD);
             flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
             flywheel.setPower(0);
             try {
-                motorTypeInfo = String.format("%.0f ticks/rev, %.0f rpm, SDK max %.0f ticks/s -> F %.2f",
-                        flywheel.getMotorType().getTicksPerRev(),
-                        flywheel.getMotorType().getMaxRPM(),
-                        flywheel.getMotorType().getAchieveableMaxTicksPerSecond(),
-                        HUB_FULL_SCALE / flywheel.getMotorType().getAchieveableMaxTicksPerSecond());
+                DcMotorEx m = flywheel.first();
+                motorTypeInfo = String.format("%s | %.0f ticks/rev, %.0f rpm, SDK max %.0f ticks/s -> F %.2f",
+                        flywheel.status(),
+                        m.getMotorType().getTicksPerRev(),
+                        m.getMotorType().getMaxRPM(),
+                        m.getMotorType().getAchieveableMaxTicksPerSecond(),
+                        HUB_FULL_SCALE / m.getMotorType().getAchieveableMaxTicksPerSecond());
             } catch (RuntimeException e) {
                 motorTypeInfo = "motor type unreadable";
             }
@@ -442,14 +447,14 @@ public class TurretShooterBenchOpMode extends OpMode {
         }
         if (now - lastCurrentSec > 0.2) {
             try {
-                motorAmps = flywheel.getCurrent(CurrentUnit.AMPS);
+                motorAmps = flywheel.getCurrentAmps();
                 motorOverCurrent = flywheel.isOverCurrent();
                 peakAmps = Math.max(peakAmps, motorAmps);
             } catch (RuntimeException ignored) { }
             lastCurrentSec = now;
         }
         if (now - lastReadbackSec > 0.5) {
-            try { hubReadback = flywheel.getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER); }
+            try { hubReadback = flywheel.first().getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER); }
             catch (RuntimeException ignored) { }
             lastReadbackSec = now;
         }
@@ -473,7 +478,9 @@ public class TurretShooterBenchOpMode extends OpMode {
             steadyPower = openLoopPower.v();
             steadyVolts = batteryVolts;
             double tps = steadyRpm * ticksPerRev.v() / 60.0;
-            suggestedF = HUB_FULL_SCALE * steadyPower / tps;
+            // Normalise to 12 V: the software speed loop scales F by 12 V / battery volts.
+            double v = Double.isFinite(steadyVolts) && steadyVolts > 7 ? steadyVolts : 12.0;
+            suggestedF = HUB_FULL_SCALE * steadyPower * (v / 12.0) / tps;
             estMaxRpm = steadyRpm / steadyPower;
         }
     }
@@ -528,11 +535,11 @@ public class TurretShooterBenchOpMode extends OpMode {
         }
         double f = Math.round(suggestedF * 100.0) / 100.0;
         kF.local(f);
-        kP.local(Math.round(0.1 * f * 100.0) / 100.0);
-        kI.local(0);
+        kP.local(Math.round(1.2 * f * 100.0) / 100.0);
+        kI.local(Math.round(1.2 * f * 100.0) / 100.0);
         kD.local(0);
-        statusMessage = String.format("Applied F=%.2f P=%.2f I=0 D=0 from %.0f rpm @ %.0f%% power. Switch to velocity mode (Back).",
-                f, kP.v(), steadyRpm, steadyPower * 100);
+        statusMessage = String.format("Applied F=%.2f P=%.2f I=%.2f D=0 from %.0f rpm @ %.0f%% power. Switch to velocity mode (Back).",
+                f, kP.v(), kI.v(), steadyRpm, steadyPower * 100);
     }
 
     private void saveCalibration() {
@@ -570,6 +577,13 @@ public class TurretShooterBenchOpMode extends OpMode {
         multiTelemetry.addData("Command", velocityMode.v()
                 ? String.format("%.0f rpm", target) : String.format("%.0f%% power", openLoopPower.v() * 100));
         multiTelemetry.addData("Battery V", "%.2f", batteryVolts);
+        if (flywheel != null && velocityMode.v()) {
+            double out = flywheel.getPower();
+            multiTelemetry.addData("Speed loop", "%s, power %.0f%%, I term %+.0f%%%s",
+                    FlywheelPair.SOFTWARE_VELOCITY ? "software (battery compensated)" : "hub PIDF",
+                    out * 100, flywheel.getIntegralPower() * 100,
+                    out > 0.97 ? "  >> PINNED AT FULL POWER: target too high, motor will overheat <<" : "");
+        }
         multiTelemetry.addData("Raw rpm (unfiltered)", "%.0f", rpmRaw);
         multiTelemetry.addData("motorAmps", String.format("%.2f", motorAmps));
         multiTelemetry.addData("Motor current (peak this run)", "%.2f A now, %.2f A peak%s", motorAmps, peakAmps,
@@ -587,7 +601,7 @@ public class TurretShooterBenchOpMode extends OpMode {
         if (steady) {
             multiTelemetry.addData("STEADY", "%.0f rpm @ %.0f%% power, %.2f V", steadyRpm, steadyPower * 100, steadyVolts);
             multiTelemetry.addData("Suggested F (32767/tps)", "%.2f", suggestedF);
-            multiTelemetry.addData("Suggested P (0.1 F)", "%.2f", 0.1 * suggestedF);
+            multiTelemetry.addData("Suggested P and I (1.2 F)", "%.2f", 1.2 * suggestedF);
             multiTelemetry.addData("Rough max rpm @100%", "%.0f", estMaxRpm);
             multiTelemetry.addLine("Right Stick Click = apply these, then Back = velocity mode");
         } else {

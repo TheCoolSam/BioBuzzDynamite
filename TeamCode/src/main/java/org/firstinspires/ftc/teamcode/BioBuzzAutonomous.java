@@ -5,7 +5,7 @@ import org.firstinspires.ftc.teamcode.robot.*;
 import org.firstinspires.ftc.teamcode.scoring.ScoringController;
 
 /** Explicit measured fixed route; faults switch to park only while localization/path remain safe. */
-@Autonomous(name="BIOBUZZ Fixed Route",group="Competition")
+@Autonomous(name="BIOBUZZ Fixed Route",group="Competition",preselectTeleOp="BIOBUZZ TeleOp")
 public final class BioBuzzAutonomous extends BioBuzzTeleOp {
     private FixedRouteAuto auto;
     private int previousCount;

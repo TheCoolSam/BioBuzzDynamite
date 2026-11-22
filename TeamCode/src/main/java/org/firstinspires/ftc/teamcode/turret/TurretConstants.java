@@ -14,33 +14,37 @@ package org.firstinspires.ftc.teamcode.turret;
  */
 public final class TurretConstants {
 
-    /** Placeholder physical stop, about -165 degrees. */
+    // Yaw limits. CAD sweep of Ragnar Chassis Rev E v283 (Nov 19 2026), turret 0 = CAD pose
+    // (pointing forward), positive = CCW seen from above. After the flower pivot cross-tube was
+    // split into two stubs, nothing on the chassis blocks the turret anywhere in 360 degrees with
+    // the flower arms stowed or tilted outward (top of the arms away from the robot, any angle).
+    // Closest passes, stowed: Limelight mount bolt heads ~1 mm from the right flower arm near
+    // -5 degrees and from the left arm near -110 degrees.
+    // Arms tilted back over the robot (top toward the turret) DO hit the turret: never do that.
+    // So these limits are set by the turret wiring, not by collisions. They are only right
+    // once TurretHardwareConfig.ENCODER_ZERO_OFFSET_RAD is calibrated so 0 = straight forward.
+
+    /** Final safety clamp: no power further than this (wiring limit). */
     public static final double PHYSICAL_MIN_RAD = Math.toRadians(-165.0);
 
-    /** Placeholder physical stop, about +165 degrees. Final safety clamp only. */
+    /** Final safety clamp: no power further than this (wiring limit). */
     public static final double PHYSICAL_MAX_RAD = Math.toRadians(165.0);
 
-    /**
-     * Lowest turret angle the controller will intentionally command.
-     * Inside the physical stop by about 5 degrees. Placeholder, about -160 degrees.
-     */
+    /** Lowest turret angle the controller will intentionally command (CW). */
     public static final double OPERATING_MIN_RAD = Math.toRadians(-160.0);
 
-    /**
-     * Highest turret angle the controller will intentionally command.
-     * Inside the physical stop by about 5 degrees. Placeholder, about +160 degrees.
-     */
+    /** Highest turret angle the controller will intentionally command (CCW). */
     public static final double OPERATING_MAX_RAD = Math.toRadians(160.0);
 
     /**
-     * Unwind latches on once the commanded turret angle passes this.
-     * About 140 degrees. Once latched, recovery continues inside the exit angle.
+     * Unwind (turn the chassis instead) latches once the commanded turret angle passes this on
+     * either side. Must be below the smaller operating limit.
      */
     public static final double UNWIND_ENTER_RAD = Math.toRadians(140.0);
 
     /**
      * Unwind stays latched until target geometry and measured turret are inside this.
-     * About 130 degrees. Stops the request from flickering around the enter angle.
+     * Stops the request from flickering around the enter angle.
      */
     public static final double UNWIND_EXIT_RAD = Math.toRadians(130.0);
 

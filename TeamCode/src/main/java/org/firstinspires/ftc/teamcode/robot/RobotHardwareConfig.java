@@ -49,6 +49,7 @@ public final class RobotHardwareConfig {
         s.pitchSensor = "pitchSensor";
         s.gapSensor = "gapSensor";
         s.flywheel = "flywheel";
+        s.flywheel2 = FlywheelPair.SECOND_NAME;
         s.hood = "hood";
         s.compression = "compression";
         s.intake = "intake";
@@ -77,10 +78,11 @@ public final class RobotHardwareConfig {
         s.scoringPositionTolerance = 2.0;
         s.scoringHeadingTolerance = Math.toRadians(3.0);
 
-        // STARTING VALUES, not measured. Hub velocity PIDF scale: F ~= 32767 / max ticks per second
-        // and P ~= 0.1 * F (the SDK's own REV defaults are P 1.17, F 11.7 for a 6000 rpm / 28 tick motor).
-        // Replace with the numbers from "Shooter & Hood Bench Tuner" (open-loop F measurement, then P).
-        s.flywheelPidf = new PIDFCoefficients(1.25, 0.0, 0.0, 12.5);
+        // STARTING VALUES, not measured. Hub units (FlywheelPair runs them in software, battery compensated):
+        // F ~= 32767 * power / ticks-per-second at 12 V; P and I ~= 1.2 * F. The old P 1.25 (0.1 * F) barely
+        // corrected anything, so the wheel sagged as the battery dropped. Replace with the
+        // "Shooter & Hood Bench Tuner" numbers (open-loop F measurement, then check shot recovery).
+        s.flywheelPidf = new PIDFCoefficients(15.0, 15.0, 0.0, 12.5);
         s.turretProfile = new TurretControlProfile(-2.9, 2.9, -2.8, 2.8, 2.5, 2.0, 1.2, 0.05, 0.01, 1.0, 0.1, 0.1, 0.6, 6.0, 20.0);
         s.scoringTiming = new ScoringController.Timing(1.5, 0.15, 0.3, 0.15, 1.0, 0.2, 1);
 
@@ -172,7 +174,8 @@ public final class RobotHardwareConfig {
     }
 
     public static final class Settings {
-        public String flywheel = "", hood = "", compression = "", intake = "", transfer = "", feeder = "";
+        /** feeder is a continuous-rotation servo (goBILDA dual-mode servo set to continuous). */
+        public String flywheel = "", flywheel2 = "", hood = "", compression = "", intake = "", transfer = "", feeder = "";
         public String entrySensor = "", stageSensor = "", exitSensor = "", limelight = "";
         public String huskyLens = "", pitchSensor = "", gapSensor = "";
         public String calibrationRevision = "";
@@ -231,7 +234,7 @@ public final class RobotHardwareConfig {
                 throw new IllegalStateException("Measured output-side feedback, geometry, cell point, release solver and revision required");
             if (!benchAccepted) throw new IllegalStateException("Physical bench acceptance required");
             if (alliance == null || alliance == AllianceColor.UNKNOWN) throw new IllegalStateException("Match alliance required for field-centric driver mapping");
-            String[] names = {pitchSensor, gapSensor, flywheel, hood, compression, intake, transfer, feeder, entrySensor, stageSensor, exitSensor, limelight,
+            String[] names = {pitchSensor, gapSensor, flywheel, flywheel2, hood, compression, intake, transfer, feeder, entrySensor, stageSensor, exitSensor, limelight,
                     PedroConstants.FRONT_LEFT_MOTOR, PedroConstants.BACK_LEFT_MOTOR, PedroConstants.FRONT_RIGHT_MOTOR,
                     PedroConstants.BACK_RIGHT_MOTOR, PedroConstants.PINPOINT_NAME, TurretHardwareConfig.SERVO_NAME, TurretHardwareConfig.ENCODER_NAME};
             Set<String> unique = new HashSet<String>();

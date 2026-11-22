@@ -6,6 +6,7 @@ import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -22,8 +23,11 @@ import org.firstinspires.ftc.teamcode.auto.HeadingHold;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoPlan;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoRunner;
 import org.firstinspires.ftc.teamcode.auto.SimpleAutoStorage;
+import org.firstinspires.ftc.teamcode.match.AllianceColor;
+import org.firstinspires.ftc.teamcode.match.MatchSetup;
 import org.firstinspires.ftc.teamcode.pedro.PedroConstants;
 import org.firstinspires.ftc.teamcode.robot.BasicDrive;
+import org.firstinspires.ftc.teamcode.robot.FlywheelPair;
 import org.firstinspires.ftc.teamcode.scoring.ShooterCalibrationStorage;
 import org.firstinspires.ftc.teamcode.test.DashboardTunables;
 
@@ -51,7 +55,7 @@ import java.util.Map;
  * <p>NOTHING here has been run on the real robot. Verify wheel directions, then mechanism directions,
  * with the robot on blocks, before the first floor run (see doc/SIMPLE_AUTO_GUIDE.md).
  */
-@Autonomous(name = "BIOBUZZ Simple Auto", group = "Competition")
+@Autonomous(name = "BIOBUZZ Simple Auto", group = "Competition", preselectTeleOp = "BIOBUZZ TeleOp")
 public final class BioBuzzSimpleAuto extends OpMode {
     private static final PwmControl.PwmRange AXON_PWM_RANGE = new PwmControl.PwmRange(500, 2500, 20000);
     private static final String[] ROUTE_NAMES = {"0 LEAVE ONLY", "1 PRELOAD SHOT + PARK", "2 PRELOAD + PICKUP + SECOND SHOT + PARK"};
@@ -76,6 +80,11 @@ public final class BioBuzzSimpleAuto extends OpMode {
     // Route
     private final DashboardTunables.Num route = num("ROUTE", 1, true);
     private final DashboardTunables.Flag blue = flag("BLUE_ALLIANCE", false, true);
+    /**
+     * Pit only, robot on blocks: lets the INIT wheel test spin the drive motors. Never saved, always
+     * starts OFF, so a stray LB/RB/RT press while lining up at a match cannot move the robot in INIT.
+     */
+    private final DashboardTunables.Flag pitWheelTest = flag("PIT_WHEEL_TEST", false, false);
     private final DashboardTunables.Num startDelay = num("START_DELAY_SEC", 0.0, true);
     private final DashboardTunables.Num shots = num("SHOTS", 3, true);
     // Drive
@@ -112,8 +121,8 @@ public final class BioBuzzSimpleAuto extends OpMode {
     private final DashboardTunables.Flag useEncoder = flag("USE_ENCODER_FOR_READY", true, true);
     private final DashboardTunables.Num shotPower = num("SHOT_POWER", 0.30, false);
     private final DashboardTunables.Num shotRpm = num("SHOT_RPM", 3000, false);
-    private final DashboardTunables.Num kP = num("P", 1.25, false);
-    private final DashboardTunables.Num kI = num("I", 0.0, false);
+    private final DashboardTunables.Num kP = num("P", 15.0, false);
+    private final DashboardTunables.Num kI = num("I", 15.0, false);
     private final DashboardTunables.Num kD = num("D", 0.0, false);
     private final DashboardTunables.Num kF = num("F", 12.5, false);
     private final DashboardTunables.Num ticksPerRev = num("TICKS_PER_REV", 28.0, false);
@@ -141,8 +150,10 @@ public final class BioBuzzSimpleAuto extends OpMode {
     private final DcMotor[] drive = new DcMotor[4]; // FL, BL, FR, BR
     private final boolean[] appliedReverse = new boolean[4];
     private final boolean[] appliedReverseKnown = new boolean[4];
-    private DcMotorEx flywheel;
-    private DcMotor intake, transfer, feeder;
+    private FlywheelPair flywheel;
+    private DcMotor intake, transfer;
+    /** Final feeder: goBILDA dual-mode servo in continuous mode. */
+    private CRServo feeder;
     private Servo hood, compression;
     private VoltageSensor battery;
     private IMU imu;
@@ -215,18 +226,20 @@ public final class BioBuzzSimpleAuto extends OpMode {
         applyDriveDirections();
 
         try {
-            flywheel = hardwareMap.get(DcMotorEx.class, "flywheel");
+            flywheel = FlywheelPair.map(hardwareMap, "flywheel", FlywheelPair.SECOND_NAME);
             flywheel.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
             flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            flywheel.setDirection(DcMotorSimple.Direction.FORWARD);
             flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
             flywheel.setPower(0);
             flywheelMode = DcMotor.RunMode.RUN_WITHOUT_ENCODER;
+            if (!flywheel.hasSecond()) hardwareProblems.add("flywheel: " + flywheel.status());
         } catch (Exception e) {
             hardwareProblems.add("flywheel not found");
         }
         intake = motor("intake");
         transfer = motor("transfer");
-        feeder = motor("feeder");
+        feeder = crServo("feeder");
         hood = servo("hood");
         compression = servo("compression");
         try { battery = hardwareMap.voltageSensor.iterator().next(); } catch (RuntimeException ignored) { }
@@ -242,11 +255,13 @@ public final class BioBuzzSimpleAuto extends OpMode {
     @Override
     public void init_loop() {
         // Alliance and route from the gamepad. Held LB is the wheel test, so the buttons do not double up.
-        boolean lb = gamepad1.left_bumper;
+        boolean lb = gamepad1.left_bumper && pitWheelTest.v();
         if (!lb) {
             if (gamepad1.x) blue.local(true);
             if (gamepad1.b) blue.local(false);
         }
+        // Carry the pick into TeleOp (same buttons there: X blue, B red).
+        MatchSetup.setAlliance(blue.v() ? AllianceColor.BLUE : AllianceColor.RED);
         boolean up = gamepad1.dpad_up, down = gamepad1.dpad_down;
         if (up && !prevUp) route.local(Math.min(2, Math.round(route.v()) + 1));
         if (down && !prevDown) route.local(Math.max(0, Math.round(route.v()) - 1));
@@ -286,7 +301,9 @@ public final class BioBuzzSimpleAuto extends OpMode {
         multi.addData("Hood / compression", "%.2f / %.2f (from bench file)", hoodPos.v(), compressionPos.v());
         multi.addData("Heading hold", headingHold.v() ? "ON" : "off (verify the IMU, then tick HEADING_HOLD)");
         multi.addData("IMU", imuStatus + (imu != null && Double.isFinite(readHeading()) ? String.format(Locale.US, " | yaw %.1f deg (turn the robot counterclockwise by hand: it must INCREASE)", lastHeadingDeg) : ""));
-        multi.addLine("Wheel test (pit only, robot on blocks): hold LB + X=FL Y=FR A=BL B=BR, or RB=all forward, RT=strafe right.");
+        multi.addLine(pitWheelTest.v()
+                ? ">> PIT WHEEL TEST ON (robot on blocks!): hold LB + X=FL Y=FR A=BL B=BR, or RB=all forward, RT=strafe right. Turn PIT_WHEEL_TEST off before a match."
+                : "Nothing moves in INIT. (Wheel test: Dashboard PIT_WHEEL_TEST, pit only.)");
         multi.addLine("OPTIONS saves auto tuning to the Control Hub.");
         multi.addData("Saved values", storageStatus.isEmpty() ? "none loaded (code defaults)" : storageStatus);
         if (!saveStatus.isEmpty()) multi.addData("Last save", saveStatus);
@@ -496,6 +513,17 @@ public final class BioBuzzSimpleAuto extends OpMode {
         }
     }
 
+    private CRServo crServo(String name) {
+        try {
+            CRServo s = hardwareMap.get(CRServo.class, name);
+            s.setPower(0);
+            return s;
+        } catch (Exception e) {
+            hardwareProblems.add("continuous servo \"" + name + "\" not found (configure it as a Continuous Rotation Servo)");
+            return null;
+        }
+    }
+
     private Servo servo(String name) {
         try {
             Servo s = hardwareMap.get(Servo.class, name);
@@ -544,7 +572,9 @@ public final class BioBuzzSimpleAuto extends OpMode {
     private void wheelTest() {
         double[] p = new double[4];
         final double power = 0.30;
-        if (gamepad1.left_bumper) {
+        if (!pitWheelTest.v()) {
+            // Match safety: nothing moves in INIT unless the pit-only switch is on in the Dashboard.
+        } else if (gamepad1.left_bumper) {
             if (gamepad1.x) p[0] = power;
             if (gamepad1.y) p[2] = power;
             if (gamepad1.a) p[1] = power;
@@ -644,7 +674,9 @@ public final class BioBuzzSimpleAuto extends OpMode {
                 lastPidfSig = sig;
             }
             double tps = shotRpm.v() * (ticksPerRev.v() > 0 ? ticksPerRev.v() : 28.0) / 60.0;
-            if (tps != lastFlywheelSetpoint) { flywheel.setVelocity(tps); lastFlywheelSetpoint = tps; }
+            // Every loop: FlywheelPair runs the battery-compensated speed loop one step per call.
+            flywheel.setVelocity(tps);
+            lastFlywheelSetpoint = tps;
         }
     }
 
@@ -675,9 +707,10 @@ public final class BioBuzzSimpleAuto extends OpMode {
         stopDrive();
         setFlywheelOff();
         flywheelWasOn = false;
-        for (DcMotor m : new DcMotor[]{intake, transfer, feeder}) {
+        for (DcMotor m : new DcMotor[]{intake, transfer}) {
             if (m != null) { try { m.setPower(0); } catch (RuntimeException ignored) { } }
         }
+        if (feeder != null) { try { feeder.setPower(0); } catch (RuntimeException ignored) { } }
     }
 
     private static double clamp01(double v) { return Double.isNaN(v) ? 0 : Math.max(0, Math.min(1, v)); }

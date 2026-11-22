@@ -37,7 +37,7 @@ $classpath = $classes + [IO.Path]::PathSeparator + $PedroCoreJar
 $sources = @()
 foreach ($package in @('math', 'match', 'planning/pickup', 'state', 'turret', 'vision/pieces', 'scoring', 'robot')) {
     $sources += Get-ChildItem -LiteralPath (Join-Path $sourceRoot $package) -Filter '*.java' |
-        Where-Object { $_.Name -notin @('HuskyLensPieceObservationSource.java', 'RevTurretIO.java', 'LimelightTargetSource.java', 'RevRobotIO.java', 'RobotHardwareConfig.java', 'RevBasicDrive.java', 'ShooterCalibrationStorage.java', 'HuskyLensEntryClassifier.java', 'DriveHardwareConfig.java') } |
+        Where-Object { $_.Name -notin @('HuskyLensPieceObservationSource.java', 'RevTurretIO.java', 'LimelightTargetSource.java', 'RevRobotIO.java', 'RobotHardwareConfig.java', 'RevBasicDrive.java', 'ShooterCalibrationStorage.java', 'ShotTrimStorage.java','HuskyLensEntryClassifier.java', 'DriveHardwareConfig.java', 'FlywheelPair.java') } |
         ForEach-Object FullName
 }
 # Simple Auto: only the pure-logic files. SimpleAutoStorage needs the Android SDK and is left out.
@@ -47,7 +47,7 @@ foreach ($name in @('SimpleAutoPlan', 'SimpleAutoRunner', 'FlywheelReadyDetector
 foreach ($name in @('PedroManualDrive', 'PedroMappedReading', 'PedroPoseAdapter')) {
     $sources += Join-Path $sourceRoot ('pedro/' + $name + '.java')
 }
-$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios', 'MovingShotScenarios', 'LauncherCalibrationScenarios', 'CompetitionReadinessScenarios', 'VisionAimScenarios', 'AimPointScenarios', 'SimpleAutoScenarios')
+$scenarios = @('PickupPlannerScenarios', 'PieceTrackerScenarios', 'RobotStateHistoryScenarios', 'TurretSafetyScenarios', 'PedroMappingScenarios', 'SafetyRegressionScenarios', 'TurretBenchScenarios', 'AuditRegressionScenarios', 'RobotIntegrationScenarios', 'MovingShotScenarios', 'LauncherCalibrationScenarios', 'CompetitionReadinessScenarios', 'VisionAimScenarios', 'AimPointScenarios', 'SimpleAutoScenarios', 'ShotTrimScenarios')
 foreach ($scenario in $scenarios) {
     $sources += Join-Path $sourceRoot ('test/' + $scenario + '.java')
 }

@@ -26,8 +26,10 @@ public final class RevRobotIO implements RobotIO {
     private final TurretPoseHistory turretHistory=new TurretPoseHistory();
     private GoBildaPinpointDriver pinpoint;
     private RevTurretIO turret;
-    private DcMotorEx flywheel;
-    private DcMotor intake,transfer,feeder;
+    private FlywheelPair flywheel;
+    private DcMotor intake,transfer;
+    /** Final feeder: goBILDA dual-mode servo in continuous mode. */
+    private CRServo feeder;
     private Servo hood,compression;
     private AnalogInput pitchSensor,gapSensor;
     private AnalogVoltageHealth pitchHealth,gapHealth;
@@ -76,11 +78,12 @@ public final class RevRobotIO implements RobotIO {
             }
             pinpoint=map.get(GoBildaPinpointDriver.class,PedroConstants.PINPOINT_NAME);
             turret=new RevTurretIO(map,settings.turretProfile);
-            flywheel=map.get(DcMotorEx.class,settings.flywheel);flywheel.setPower(0);motors.add(flywheel);
+            flywheel=FlywheelPair.map(map,settings.flywheel,settings.flywheel2);flywheel.setPower(0);motors.addAll(flywheel.motors());
             flywheel.setDirection(settings.flywheelReverse?DcMotorSimple.Direction.REVERSE:DcMotorSimple.Direction.FORWARD);
             flywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
             flywheel.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER,settings.flywheelPidf);
-            intake=motor(map,settings.intake);transfer=motor(map,settings.transfer);feeder=motor(map,settings.feeder);
+            intake=motor(map,settings.intake);transfer=motor(map,settings.transfer);
+            feeder=map.get(CRServo.class,settings.feeder);feeder.setPower(0);
             intake.setDirection(settings.intakeReverse?DcMotorSimple.Direction.REVERSE:DcMotorSimple.Direction.FORWARD);
             transfer.setDirection(settings.transferReverse?DcMotorSimple.Direction.REVERSE:DcMotorSimple.Direction.FORWARD);
             feeder.setDirection(settings.feederReverse?DcMotorSimple.Direction.REVERSE:DcMotorSimple.Direction.FORWARD);
@@ -249,6 +252,7 @@ public final class RevRobotIO implements RobotIO {
         // Attempt every independent actuator even if an earlier write failed.
         if(follower!=null)try{follower.manual(DrivePowers.zero());}catch(RuntimeException e){fault=true;}
         for(DcMotor motor:motors)try{motor.setPower(0);}catch(RuntimeException e){fault=true;}
+        if(feeder!=null)try{feeder.setPower(0);}catch(RuntimeException e){fault=true;}
         if(turret!=null) {
             turret.stop();
             if(!turret.motorFault.isEmpty()&&!turret.safety.directionFault())fault=true;
