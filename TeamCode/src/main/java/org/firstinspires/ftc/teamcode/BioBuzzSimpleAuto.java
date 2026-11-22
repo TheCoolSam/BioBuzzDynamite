@@ -298,7 +298,7 @@ public final class BioBuzzSimpleAuto extends OpMode {
         multi.addData("Flywheel mode", openLoop.v()
                 ? String.format(Locale.US, "OPEN LOOP power %.2f (ready: %s)", shotPower.v(), useEncoder.v() ? "encoder plateau" : "fixed timer")
                 : String.format(Locale.US, "VELOCITY %.0f rpm, PIDF %.2f/%.2f/%.2f/%.2f", shotRpm.v(), kP.v(), kI.v(), kD.v(), kF.v()));
-        multi.addData("Hood / compression", "%.2f / %.2f (from bench file)", hoodPos.v(), compressionPos.v());
+        multi.addData("Hood / compression", "%.2f / %.2f (from the Bench Tuner's SAVED values: change them there and press Options)", hoodPos.v(), compressionPos.v());
         multi.addData("Heading hold", headingHold.v() ? "ON" : "off (verify the IMU, then tick HEADING_HOLD)");
         multi.addData("IMU", imuStatus + (imu != null && Double.isFinite(readHeading()) ? String.format(Locale.US, " | yaw %.1f deg (turn the robot counterclockwise by hand: it must INCREASE)", lastHeadingDeg) : ""));
         multi.addLine(pitWheelTest.v()
@@ -351,8 +351,7 @@ public final class BioBuzzSimpleAuto extends OpMode {
                 }
             }
         }
-        enableServos();
-        applyServoPositions();
+        enableServos();   // sends hood/compression positions, then powers the servos (no jump to end of travel)
         applyDriveDirections();
         applyMechanismDirections();
         loopTimer.reset();
@@ -538,10 +537,15 @@ public final class BioBuzzSimpleAuto extends OpMode {
         }
     }
 
+    /**
+     * Position first, then power. Powering a servo before it has a position makes it run to its
+     * last/default position (the hood slammed to the end of travel, then dropped back).
+     */
     private void enableServos() {
+        servosEnabled = true;
+        applyServoPositions();
         if (hood instanceof PwmControl) ((PwmControl) hood).setPwmEnable();
         if (compression instanceof PwmControl) ((PwmControl) compression).setPwmEnable();
-        servosEnabled = true;
     }
 
     private void applyServoPositions() {

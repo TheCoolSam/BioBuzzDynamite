@@ -153,6 +153,9 @@ public class TurretShooterBenchOpMode extends OpMode {
         pollenCompression.local(saved.pollenCompression);
         nectarCompression.local(saved.nectarCompression);
         hoodPosition.local(saved.hoodPosition);
+        savedHood = saved.hoodPosition;
+        savedPollen = saved.pollenCompression;
+        savedNectar = saved.nectarCompression;
         targetRpm.local(saved.targetRpm);
         openLoopPower.local(saved.openLoopPower);
         ticksPerRev.local(saved.ticksPerRev);
@@ -219,8 +222,10 @@ public class TurretShooterBenchOpMode extends OpMode {
 
     @Override
     public void start() {
-        enableServos();
+        // Engaged first: enableServos() sends the position before switching servo power on. The old
+        // order powered the servos with no position sent, so the hood slammed to the end of travel.
         servosEngaged = true;
+        enableServos();
         statusMessage = "Running in " + (velocityMode.v() ? "VELOCITY" : "OPEN LOOP") + " mode";
         loopTimer.reset();
     }
@@ -356,9 +361,10 @@ public class TurretShooterBenchOpMode extends OpMode {
             if (right) adjustCompression(+0.01);
         }
 
-        // Hood: bumpers fine step, right stick continuous (like the OnBot test).
-        if (eLb.rising(gamepad1.left_bumper)) hoodPosition.local(clamp(hoodPosition.v() - 0.01, 0, 1));
-        if (eRb.rising(gamepad1.right_bumper)) hoodPosition.local(clamp(hoodPosition.v() + 0.01, 0, 1));
+        // Hood: tap L1/R1 = one 0.01 step down/up; HOLD = keeps moving (after a short pause, so a tap
+        // stays a single step). Right stick still moves it continuously too.
+        hoodHold(gamepad1.left_bumper, eLb, -1, dt);
+        hoodHold(gamepad1.right_bumper, eRb, +1, dt);
         double hoodStick = -gamepad1.right_stick_y;
         if (Math.abs(hoodStick) > STICK_DEADZONE) {
             hoodPosition.local(clamp(hoodPosition.v() + hoodStick * HOOD_STICK_SPEED * dt, 0, 1));
@@ -367,6 +373,26 @@ public class TurretShooterBenchOpMode extends OpMode {
         double compStick = -gamepad1.left_stick_y;
         if (Math.abs(compStick) > STICK_DEADZONE) {
             adjustCompression(compStick * COMPRESSION_STICK_SPEED * dt);
+        }
+    }
+
+    // hold-to-move hood
+    private static final double HOOD_TAP_STEP = 0.01, HOOD_HOLD_DELAY_SEC = 0.35, HOOD_HOLD_SPEED = 0.15;
+    private double hoodHeldSec = 0;
+    private int hoodHeldDir = 0;
+
+    private void hoodHold(boolean pressed, Edge edge, int dir, double dt) {
+        if (edge.rising(pressed)) {
+            hoodPosition.local(clamp(hoodPosition.v() + dir * HOOD_TAP_STEP, 0, 1));
+            hoodHeldDir = dir;
+            hoodHeldSec = 0;
+            return;
+        }
+        if (!pressed) { if (hoodHeldDir == dir) hoodHeldDir = 0; return; }
+        if (hoodHeldDir != dir) return;
+        hoodHeldSec += dt;
+        if (hoodHeldSec > HOOD_HOLD_DELAY_SEC) {
+            hoodPosition.local(clamp(hoodPosition.v() + dir * HOOD_HOLD_SPEED * dt, 0, 1));
         }
     }
 
@@ -385,12 +411,14 @@ public class TurretShooterBenchOpMode extends OpMode {
         }
     }
 
+    /** Position first, then power: a servo powered before it has a position runs to its last/default one. */
     private void enableServos() {
-        if (hood instanceof PwmControl) ((PwmControl) hood).setPwmEnable();
-        if (compression instanceof PwmControl) ((PwmControl) compression).setPwmEnable();
         lastHoodCmd = Double.NaN;
         lastCompCmd = Double.NaN;
-        applyServos();
+        if (hood != null) { hood.setPosition(hoodPosition.v()); lastHoodCmd = hoodPosition.v(); }
+        if (compression != null) { compression.setPosition(activeCompression()); lastCompCmd = activeCompression(); }
+        if (hood instanceof PwmControl) ((PwmControl) hood).setPwmEnable();
+        if (compression instanceof PwmControl) ((PwmControl) compression).setPwmEnable();
     }
 
     private void disableServos() {
@@ -625,8 +653,17 @@ public class TurretShooterBenchOpMode extends OpMode {
         data.i = kI.v();
         data.d = kD.v();
         data.f = kF.v();
-        statusMessage = ShooterCalibrationStorage.save(data)
-                ? "CALIBRATION SAVED TO DISK" : "SAVE FAILED (check log)";
+        boolean ok = ShooterCalibrationStorage.save(data);
+        if (ok) { savedHood = data.hoodPosition; savedPollen = data.pollenCompression; savedNectar = data.nectarCompression; }
+        statusMessage = ok ? "CALIBRATION SAVED TO DISK (autos and TeleOp use these values)" : "SAVE FAILED (check log)";
+    }
+
+    /** What is on disk, so the screen can say when hood/compression edits are not saved yet. */
+    private double savedHood = Double.NaN, savedPollen = Double.NaN, savedNectar = Double.NaN;
+
+    private boolean servoValuesUnsaved() {
+        return Math.abs(hoodPosition.v() - savedHood) > 1e-4 || Math.abs(pollenCompression.v() - savedPollen) > 1e-4
+                || Math.abs(nectarCompression.v() - savedNectar) > 1e-4;
     }
 
     // ================================================================ telemetry
@@ -711,14 +748,17 @@ public class TurretShooterBenchOpMode extends OpMode {
         multiTelemetry.addLine("--- SHOOTER ---");
         multiTelemetry.addData("Active ball", "%s (compression %.3f)", activeBall().name(), activeCompression());
         multiTelemetry.addData("Pollen / Nectar compression", "%.3f / %.3f", pollenCompression.v(), nectarCompression.v());
-        multiTelemetry.addData("Hood position", "%.3f", hoodPosition.v());
+        multiTelemetry.addData("Hood position", "%.3f%s", hoodPosition.v(), servosEngaged ? "" : "  (servos RELAXED: press Square to move)");
+        if (servoValuesUnsaved()) {
+            multiTelemetry.addLine(">> Hood/compression changed but NOT SAVED. Press Options, or the autos will use the old values.");
+        }
         multiTelemetry.addData("Servos", servosEngaged ? "ENGAGED" : "RELAXED (unpowered)");
         multiTelemetry.addData("STATUS", statusMessage);
 
         multiTelemetry.addLine("--- CONTROLS ---");
         multiTelemetry.addLine("A/Cross flywheel | Back mode | D-pad U/D rpm or power | D-pad L/R compression");
         multiTelemetry.addLine("Hold L2 + D-pad: U/D P, L/R D | Hold R2 + D-pad: U/D F, L/R I");
-        multiTelemetry.addLine("R-stick hood | L-stick compression | LB/RB hood +/-0.01 | Y ball | X servos");
+        multiTelemetry.addLine("Hold R1 hood + / L1 hood - (tap = 0.01) |R-stick hood | L-stick compression | Triangle ball | Square servos");
         multiTelemetry.addLine("L3 auto-tune PIDF | R-stick click apply suggested PIDF | Options save | B/Circle E-STOP (hold)");
         multiTelemetry.update();
     }
