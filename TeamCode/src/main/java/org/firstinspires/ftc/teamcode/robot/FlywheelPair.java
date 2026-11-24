@@ -53,6 +53,7 @@ public final class FlywheelPair {
 
     private final DcMotorEx first;
     private final DcMotorEx second;
+    private final String secondName;
     private final List<VoltageSensor> batteries;
     private boolean secondDisabled;
     private boolean velocityMode;
@@ -68,11 +69,18 @@ public final class FlywheelPair {
     private double volts = NOMINAL_VOLTS;
     private long lastVoltsNanos = -1;
 
-    private FlywheelPair(DcMotorEx first, DcMotorEx second, List<VoltageSensor> batteries) {
+    private FlywheelPair(DcMotorEx first, DcMotorEx second, String secondName, List<VoltageSensor> batteries) {
         this.first = first;
         this.second = second;
+        this.secondName = secondName;
         this.batteries = batteries;
-        this.status = second == null ? "single motor (no \"" + SECOND_NAME + "\" configured)" : "two motors";
+        if (second != null) {
+            status = "two motors";
+        } else if (secondName == null || secondName.trim().isEmpty()) {
+            status = "single motor";
+        } else {
+            status = "single motor (no \"" + secondName + "\" configured)";
+        }
     }
 
     /** Maps both motors; the first is required, the second is used when it exists. */
@@ -88,7 +96,7 @@ public final class FlywheelPair {
         }
         List<VoltageSensor> batteries = new ArrayList<VoltageSensor>();
         for (VoltageSensor v : map.voltageSensor) batteries.add(v);
-        return new FlywheelPair(a, b, batteries);
+        return new FlywheelPair(a, b, secondName, batteries);
     }
 
     public DcMotorEx first() { return first; }
@@ -125,6 +133,7 @@ public final class FlywheelPair {
 
     public void setPIDFCoefficients(DcMotor.RunMode mode, PIDFCoefficients pidf) {
         gains = new PIDFCoefficients(pidf.p, pidf.i, pidf.d, pidf.f);
+        if (SOFTWARE_VELOCITY && mode == DcMotor.RunMode.RUN_USING_ENCODER) return;
         first.setPIDFCoefficients(mode, pidf);
         if (second != null) second.setPIDFCoefficients(mode, pidf);
     }
@@ -234,7 +243,7 @@ public final class FlywheelPair {
         if ((now - mismatchSinceNanos) * 1e-9 >= MISMATCH_SEC) {
             secondDisabled = true;
             second.setPower(0);
-            status = "SECOND MOTOR OFF: \"" + SECOND_NAME + "\" encoder reads ~0 while the first motor spins "
+            status = "SECOND MOTOR OFF: \"" + secondName + "\" encoder reads ~0 while the first motor spins "
                     + "(check its encoder cable, then restart the OpMode)";
         }
     }

@@ -2,6 +2,11 @@
 
 This repository contains the public FTC SDK for the BIOBUZZ (2026-2027) competition season.
 
+## Flywheel PIDF auto-tuner
+
+FTC teams can add the same one- or two-motor flywheel tuner to their own Android Studio project.
+See the [flywheel PIDF import and tuning guide](doc/FLYWHEEL_PIDF_FOR_TEAMS.md).
+
 ## Welcome!
 This GitHub repository contains the source code that is used to build an Android app to control a *FIRST* Tech Challenge competition robot.  To use this SDK, download/clone the entire project to your local computer.
 

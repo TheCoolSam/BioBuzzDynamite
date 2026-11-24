@@ -1,7 +1,6 @@
 # Tuning quickstart: shooter flywheel and Limelight auto-aim
 
-Two OpModes, both in the "Bench" group on the Driver Station. Both put every tunable in
-FTC Dashboard and show on the DS screen whether Dashboard edits are really arriving.
+Both OpModes are in the **Bench** group on the Driver Hub and take tuning settings in FTC Dashboard.
 
 ## 0. Connect Dashboard (do this first, every session)
 
@@ -10,62 +9,36 @@ FTC Dashboard and show on the DS screen whether Dashboard edits are really arriv
 3. INIT the OpMode. In the **Configuration** tab a new group appears:
    `Shooter Bench` or `Auto Aim`. It disappears when the OpMode stops.
 4. **Test the link before anything else.** Change a harmless number (for example `HOOD_POSITION`),
-   press **Enter** (or the check mark). On the Driver Station look for:
+   press **Enter** (or the check mark). On the Driver Hub look for the edit count to go up.
 
-   `Dashboard edits received: 1 edits (last: HOOD_POSITION = 0.4, 1.2 s ago)`
-
-   This line is on the INIT screen too (Shooter Bench), so you can prove the link before pressing
-   START. On the INIT screen also check `Hardware: flywheel OK | hood OK | compression OK`.
+   **Shooter Bench** shows `Edits received` during INIT. Check that `flywheel`, `hood`, and
+   `compression` all show **OK** there.
    Verified on the real Control Hub on 2026-11-16: an edit typed in the browser was still there after a
    full page reload, so it reached the robot.
 
    - Count went up: Dashboard works, tune from the web page.
    - Count did not go up: the edit never left the browser. You did not press Enter/check, the laptop
-     is not on the robot Wi-Fi, or the page is stale (reload it). The gamepad still works either way.
+     is not on the robot Wi-Fi, or the page is stale (reload it).
    - `Dashboard: NOT RUNNING`: Dashboard did not start in the app. Rebuild and reinstall the Robot
      Controller app, then reboot the Control Hub.
 5. Graph tab: add `targetRpm` and `actualRpm` (shooter) or `txDeg`, `filteredTxDeg`, `demand` (aim).
 
 ## 1. Flywheel: "Shooter & Hood Bench Tuner"
 
-Why the old tuning went badly: the old defaults had P (15) larger than F (12.5). On the REV hub,
-F is about `32767 / max ticks per second` and P is about 10% of F. P = 15 means a 12% speed error
-asks for 100% power, so the wheel hunts and no P ever looks right. This tuner measures F instead of
-guessing and starts P at 0.1 F.
+1. Check the configuration names `flywheel`, `hood`, and `compression` in INIT. Press START
+   with the linkages clear. The gamepad D-pad moves the hood (up/down) and the selected ball's
+   compression (left/right).
+2. In Dashboard under **Shooter Bench**, check `TICKS_PER_REV` and set `TARGET_RPM` to your
+   shot speed. Set `AUTO_TUNE_PIDF` with the flywheel off and stopped.
+3. Wait for **Done**. The flywheel stops and the verified gains load into velocity mode.
+   If tuning fails, read the reason in Dashboard. Set `AUTO_TUNE_PIDF` again during a run to cancel.
+4. Set `FLYWHEEL_ON` and graph `targetRpm` and `actualRpm`. Once speed settles, test shot recovery.
+   Dashboard shows the last speed dip and recovery time.
+5. Turn off `FLYWHEEL_ON` and set `SAVE_CALIBRATION` to keep the settings on the Control Hub.
+   Use `STOP_ALL` to stop the flywheel and release both servos, or press **STOP** on the Driver Hub
+   to end the OpMode.
 
-1. Start in **OPEN LOOP** (like the OnBot test). Cross/A spins at `OPEN_LOOP_POWER` (starts at 90%,
-   the power the OnBot test used with the 6000 rpm goBILDA motor). Lower it with D-pad down if you want
-   to ease in.
-2. D-pad up/down changes the power in 5% steps. Run at the power you normally shoot at (about 90%).
-   Expect about 5000 to 5500 rpm and a Suggested F near 11 to 12 for this motor.
-3. After the speed holds still for 1.5 s the screen shows `STEADY`, the real rpm, battery voltage,
-   a **Suggested F** and a rough max rpm. This replaces the "about 5000 rpm" estimate with a measurement.
-4. **Right stick click** (or tick `APPLY_SUGGESTED_PIDF`): loads F, P = 0.1 F, I = D = 0.
-5. **Back/Share**: switch to **VELOCITY** mode. Set `TARGET_RPM`, press Cross/A.
-6. Tune P up in small steps (hold L2 + D-pad up, or edit `P` in Dashboard) until the `actualRpm`
-   graph reaches `targetRpm` quickly without ringing. If it rings, lower P. Add D only if needed.
-7. Feed balls. The `Last ball dip` line reports how many rpm the ball cost and how long recovery took.
-   Use it to compare settings: smaller dip and shorter recovery is better.
-8. **Options** (or tick `SAVE_CALIBRATION`) saves everything to the Control Hub. Copy the final
-   P/I/D/F into `RobotHardwareConfig.flywheelPidf`.
-
-Before the first run (Hood Servo Test robot configuration must be active on the Driver Station):
-- Config names needed: motor `flywheel`, servos `hood` and `compression`, Ethernet device `limelight`.
-- Pressing START powers both servos and moves them to the saved hood and compression positions
-  immediately. Keep hands and wires clear and make sure the linkages are free.
-- The flywheel never spins until you press A/Cross (or tick `FLYWHEEL_ON`). Hold B to stop.
-- The hub config currently labels the flywheel as a 60 rpm, 2786 ticks/rev motor. If the real flywheel
-  motor is a 28 ticks/rev bare motor, leave `TICKS_PER_REV` at 28 and ignore that line, but fix the
-  motor type in the configuration when you can.
-
-Check these lines if anything looks wrong:
-- `Flywheel motor type`: the ticks per rev the robot configuration thinks the motor has. If it is not
-  28, either fix the configuration or change `TICKS_PER_REV`. A wrong value makes every rpm number wrong.
-- `PIDF on hub ... [SYNCED]`: the hub really holds the numbers you see. `MISMATCH` means the write failed.
-- `WARNING: 0 encoder ticks/s`: the 4-pin encoder cable is not connected.
-- B/Circle is the emergency stop (hold it).
-
-Old saved PIDF/RPM values from the first version of this tuner are ignored automatically.
+For manual tuning and servo calibration, see [Shooter tuning guide](SHOOTER_TUNING_GUIDE.md).
 
 ## 2. Auto-aim: "Limelight Auto Aim"
 
